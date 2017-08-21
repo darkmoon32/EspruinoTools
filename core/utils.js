@@ -293,6 +293,8 @@
   function markdownToHTML(markdown) {
     var html = markdown;
     //console.log(JSON.stringify(html));
+    html = html.replace(/([^\n]*)\n=====*\n/g, "<h1>$1</h1>"); // heading 1
+    html = html.replace(/([^\n]*)\n-----*\n/g, "<h2>$1</h2>"); // heading 2
     html = html.replace(/\n\s*\n/g, "\n<br/><br/>\n"); // newlines
     html = html.replace(/\*\*(.*)\*\*/g, "<strong>$1</strong>"); // bold
     html = html.replace(/```(.*)```/g, "<span class=\"code\">$1</span>"); // code
@@ -312,7 +314,7 @@
           $.get( resultUrl, function(d) {
             callback(d);
           }, "text").error(function(xhr,status,err) {
-            console.error(err);
+            console.error("getURL("+JSON.stringify(url)+") error : "+err);
             callback(undefined);
           });
         } else {
@@ -325,7 +327,7 @@
               port: Espruino.Config.MODULE_PROXY_PORT,
               path: resultUrl,
             } : resultUrl;
-            
+
             require(m).get(http_options, function(res) {
               if (res.statusCode != 200) {
                 console.error("Espruino.Core.Utils.getURL: got HTTP status code "+res.statusCode+" for "+url);
@@ -337,7 +339,7 @@
                 callback(data);
               });
             }).on('error', function(err) {
-              console.error(err);
+              console.error("getURL("+JSON.stringify(url)+") error : "+err);
               callback(undefined);
             });
           } else {
@@ -375,6 +377,36 @@
     return window.location.protocol=="https:";
   }
 
+  /* Open a file load dialog. ID is to ensure that subsequent calls with
+  the same ID remember the last used directory.
+    type=="arraybuffer" => Callback is called with an arraybuffer
+    type=="text" => Callback is called with a string
+  */
+  function fileOpenDialog(id, type, callback) {
+    var loaderId = id+"FileLoader";
+    var fileLoader = document.getElementById(loaderId);
+    if (!fileLoader) {
+      fileLoader = document.createElement("input");
+      fileLoader.setAttribute("id", loaderId);
+      fileLoader.setAttribute("type", "file");
+      fileLoader.setAttribute("style", "z-index:-2000;position:absolute;top:0px;left:0px;");
+      fileLoader.addEventListener('change', function(e) {
+        if (!fileLoader.callback) return;
+        var files = e.target.files;
+        var reader = new FileReader();
+        reader.onload = function(e) {
+          fileLoader.callback(e.target.result);
+          fileLoader.callback = undefined;
+        };
+        if (type=="text") reader.readAsText(files[0]);
+        else if (type=="arraybuffer") reader.readAsArrayBuffer(files[0]);
+        else throw new Error("fileOpenDialog: unknown type "+type);
+      }, false);
+      document.body.appendChild(fileLoader);
+    }
+    fileLoader.callback = callback;
+    fileLoader.click();
+  }
 
   Espruino.Core.Utils = {
       init : init,
@@ -394,6 +426,7 @@
       getURL : getURL,
       getJSONURL : getJSONURL,
       isURL : isURL,
-      needsHTTPS : needsHTTPS
+      needsHTTPS : needsHTTPS,
+      fileOpenDialog : fileOpenDialog
   };
 }());

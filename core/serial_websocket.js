@@ -4,7 +4,15 @@ Gordon Williams (gw@pur3.co.uk)
 (function() {
 
   if (typeof window == "undefined" || typeof WebSocket == undefined) return;
+  
+  if (/*window.location.origin=="https://www.espruino.com" || */
+      window.location.origin=="https://espruino.github.io") {
+    console.log("Running from github - WebSocket support disabled");
+    return;
+  }
   console.log("WebSockets support enabled - running in web browser");
+  
+  var WS_ENABLED = true;
   var ws;
   var dataWrittenCallbacks = [];
 
@@ -26,9 +34,16 @@ Gordon Williams (gw@pur3.co.uk)
     if (Espruino.Config.RELAY_KEY) {
       callback([{path:'Web IDE Relay', description:'BLE connection via a phone', type : "bluetooth"}]);
     } else {
+      if (!WS_ENABLED) return callback([]);
       Espruino.Core.Utils.getJSONURL("/serial/ports", function(ports) {
-         if (!Array.isArray(ports)) callback([]);
-         else callback(ports);
+        if (ports===undefined) {
+          console.log("/serial/ports doesn't exist - disabling WebSocket support");
+          WS_ENABLED = false;
+          callback([]);
+          return;
+        }
+        if (!Array.isArray(ports)) callback([]);
+        else callback(ports);
       });
     }
   };

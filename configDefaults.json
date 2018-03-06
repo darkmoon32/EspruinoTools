@@ -17,7 +17,7 @@
   "espruino": {
     "BAUD_RATE": 9600,
     "BLUETOOTH_LOW_ENERGY": true,
-    "BOARD_JSON_URL": "http://www.espruino.com/json",
+    "BOARD_JSON_URL": "https://gitlab.fai.utb.cz/jurenat/espruino-description-files/raw/master/",
     "COMPILATION": true,
     "COMPILATION_URL": "http://www.espruino.com:32766",
     "ENV_ON_CONNECT": true,
@@ -39,7 +39,7 @@
     "SERIAL_THROTTLE_SEND": false,
     "SET_TIME_ON_WRITE": false,
     "STORE_LINE_NUMBERS": true,
-    "UI_MODE": "Normal",
+    "UI_MODE": "compact",
     "WEB_BLUETOOTH": true
   }
 }

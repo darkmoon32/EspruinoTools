@@ -71,19 +71,17 @@
 
         console.log("FIRMWARE: Current "+tCurrent+", Available "+tAvailable);
 
-        if (vAvailable > vCurrent && (env.BOARD=="ESPRUINOBOARD" || env.BOARD.substr(0,4)=="PICO")) {
+        if (vAvailable > vCurrent &&
+          (env.BOARD=="ESPRUINOBOARD" ||
+           env.BOARD.substr(0,4)=="PICO" ||
+           env.BOARD=="ESPRUINOWIFI" ||
+           env.BOARD=="PUCKJS")) {
           console.log("New Firmware "+tAvailable+" available");
+          Espruino.Core.Notifications.info("New Firmware available ("+vCurrent+" installed, "+tAvailable+" available)");
 
-          if (Espruino.Core.App) Espruino.Core.App.addIcon({
+          if (Espruino.Core.App) Espruino.Core.App.addAlertIcon({
             id:'update',
-            icon: 'alert',
             title: 'New Firmware '+ tAvailable +' available. Click to update.',
-            order: 999,
-            cssClass: 'title-bar__button--alert',
-            area: {
-              name: "titlebar",
-              position: "right"
-            },
             click: function(){
               Espruino.Core.MenuSettings.show("Flasher");
             }

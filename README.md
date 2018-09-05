@@ -12,11 +12,15 @@ Command-line
 When installed as a Node module with `npm install -g espruino` you get a command-line tool called `espruino`:
 
 ```
+Espruino Command-line Tool 0.1.3
+-----------------------------------
+
 USAGE: espruino ...options... [file_to_upload.js]
 
   -h,--help                : Show this message
-  -j [job.json]            : Make or load options from JSON. See 'job file' section below
-  -c,--color               : Color mode,
+  -j [job.json]            : Load options from JSON job file - see configDefaults.json
+                               Calling without a job filename creates a new job file
+                               named after the uploaded file
   -v,--verbose             : Verbose
   -q,--quiet               : Quiet - apart from Espruino output
   -m,--minify              : Minify the code before sending it
@@ -24,32 +28,42 @@ USAGE: espruino ...options... [file_to_upload.js]
                                changes and upload again if it does.
   -p,--port /dev/ttyX
   -p,--port aa:bb:cc:dd:ee : Specify port(s) or device addresses to connect to
+  -d deviceName            : Connect to the first device with a name containing deviceName
   -b baudRate              : Set the baud rate of the serial connection
                                No effect when using USB, default: 9600
-  --no-ble                 : Disable Bluetooth Low Energy (used by default if the 'bleat' module exists)
+  --no-ble                 : Disables Bluetooth Low Energy (using the 'noble' module)
   --list                   : List all available devices and exit
+  --listconfigs            : Show all available config options and exit
+  --config key=value       : Set internal Espruino config option
   -t,--time                : Set Espruino's time when uploading code
   -o out.js                : Write the actual JS code sent to Espruino to a file
-  -f firmware.bin          : Update Espruino's firmware to the given file
-                               Espruino must be in bootloader mode
-                               Optionally skip N first bytes of the bin file,
+  -ohex out.hex            : Write the JS code to a hex file as if sent by E.setBootCode
+  -n                       : Do not connect to Espruino to upload code
+  --board BRDNAME/BRD.json : Rather than checking on connect, use the given board name or file
+  -f firmware.bin[:N]      : Update Espruino's firmware to the given file
+                               Espruino must be in bootloader mode.
+                               Optionally skip N first bytes of the bin file.
   -e command               : Evaluate the given expression on Espruino
                                If no file to upload is specified but you use -e,
                                Espruino will not be reset
-#
+
 If no file, command, or firmware update is specified, this will act
 as a terminal for communicating directly with Espruino. Press Ctrl-C
 twice to exit.
+
 ```
 
 For instance:
 
 ```
-# Connect to Espruno and act as a terminal app  (IF Espruino is the only serial port reported)
+# Connect to Espruino and act as a terminal app  (IF Espruino is the only serial port reported)
 espruino
 
 # Connect to Espruino on the specified port, act as a terminal
 espruino -p /dev/ttyACM0
+
+# Connect to the first device found with 'Puck' in the name (eg. a Puck.js via Bluetooth)
+espruino -d puck
 
 # Write a program to Espruino (IF Espruino is the only serial port reported)
 espruino myprogram.js
@@ -71,7 +85,6 @@ espruino -p /dev/ttyACM0 mycode.js -e "save()"
 espruino -e "digitalWrite(LED1,1);"
 ```
 
-
 Bluetooth
 ----------
 If the NPM module `noble` is installed, it'll be used to scan for Bluetooth LE UART devices like [Puck.js](http://puck-js.com). It's an optional dependency, so will be installed if possible - but if not you just won't get BLE support.
@@ -84,6 +97,50 @@ On linux, you'll need to run as superuser to access Bluetooth Low Energy. To avo
 sudo setcap cap_net_raw+eip $(eval readlink -f `which node`)
 ```
 
+Not Connecting
+--------------
+
+Sometimes, you might want to run your JS file(s) through the Espruino Tools
+to create an output file that contains everything required, including modules.
+This file can then be sent directly to Espruino at some later time -
+sometimes just `cat file.js > /dev/ttyACM0` is enough.
+
+To do this, you don't need to connect, you just need to be able to specify the
+board type, which corresponds to a JSON file in http://www.espruino.com/json/
+
+```
+# Get a minified, complete JS file
+espruino --board PUCKJS --minify mycode.js -o output.js
+```
+
+You can also request an Intel Hex style output. This only works on some
+devices, but allows you to write directly into Espruino's memory space
+with a flashing tool.
+
+This is as if `E.setBootCode(your_code)` was called in the interpreter,
+except it doesn't have any code size limitations. It means that any
+functions that are defined in your program will be executed directly
+from Flash, without taking up any RAM.
+
+```
+# Get a hex file that can be flashed directly to the board
+espruino --board PUCKJS mycode.js -ohex output.hex
+```
+
+Configuration
+-------------
+
+In Espruino's Web IDE there are a lot of different config options. These
+end up toggling Config settings in Espruino. You can find what these are
+by going into the Web IDE, changing the option in Settings, then going
+to the `Console` window and scrolling to the bottom. You should see
+something like `Config.RESET_BEFORE_SEND => true`
+
+You can then add the command-line option `--config RESET_BEFORE_SEND=true`
+to recreate this.
+
+You can also use `--listconfigs` to give you a nice list of configs with
+their descriptions.
 
 NPM Module
 ----------

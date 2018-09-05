@@ -1,5 +1,8 @@
 /*
 Gordon Williams (gw@pur3.co.uk)
+
+Used for Relay service on espruino.com/ide as well as `npm espruino-web-ide`'s
+`espruino-server`.
 */
 (function() {
 
@@ -79,9 +82,8 @@ Gordon Williams (gw@pur3.co.uk)
       };
       ws.onclose = function(event) {
         currentDevice = undefined;
-        Espruino.callProcessor("disconnected", undefined, function() {
-          disconnectCallback();
-        });
+        if (disconnectCallback) disconnectCallback();
+        disconnectCallback = undefined;
         ws = undefined;
       };
     }
@@ -101,7 +103,7 @@ Gordon Williams (gw@pur3.co.uk)
 
   // ----------------------------------------------------------
   Espruino.Core.Serial.devices.push({
-    "name" : "Websocket",
+    "name" : "Websocket Relay",
     "getPorts": getPorts,
     "open": openSerial,
     "write": writeSerial,

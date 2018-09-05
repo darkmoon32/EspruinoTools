@@ -97,7 +97,8 @@
     if (APPLY_LINE_NUMBERS) {
       var l = code.split("\n");
       var i = 0;
-      while (l[i] && l[i].substr(0,8)=="Modules.") i++;
+      while (l[i] && (l[i].substr(0,8)=="Modules." ||
+                      l[i].substr(0,8)=="setTime(")) i++;
       lineNumberOffset = -i;
     }
 
@@ -115,6 +116,7 @@
      *   `var a, \n b`     `var a = 0, \n b`
      *   `a \n . b`
      *   `foo() \n . b`
+     *   `try { } \n catch \n () \n {}`
      *
      *   These are divided into two groups - where there are brackets
      *   after the keyword (statementBeforeBrackets) and where there aren't
@@ -130,7 +132,7 @@
     var statement = false;
     var varDeclaration = false;
     var lastIdx = 0;
-    var lastTok;
+    var lastTok = {str:""};
     var tok = lex.next();
     while (tok!==undefined) {
       var previousString = code.substring(lastIdx, tok.startIdx);
@@ -146,7 +148,9 @@
           tok.str=="," || // comma on newline - there was probably something before
           tok.str=="." || // dot on newline - there was probably something before
           tok.str=="=" || // equals on newline - there was probably something before
-          tok.str=="else" // else on newline
+          tok.str=="else" || // else on newline
+          tok.str=="catch" || // catch on newline - part of try..catch
+          lastTok.str=="catch"
         ) {
         //console.log("Possible"+JSON.stringify(previousString));
         previousString = previousString.replace(/\n/g, "\x1B\x0A");
@@ -162,7 +166,9 @@
           varDeclaration = false;
         } else if (tok.str=="var") {
           varDeclaration = true;
-        } else if (tok.type=="ID" && lastTok!==undefined && lastTok.str=="function") {
+        } else if (tok.type=="ID" && lastTok.str=="function") {
+          statementBeforeBrackets = true;
+        } else if (tok.str=="try" || tok.str=="catch") {
           statementBeforeBrackets = true;
         } else if (tok.str==")" && statementBeforeBrackets) {
           statementBeforeBrackets = false;

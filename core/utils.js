@@ -28,6 +28,22 @@
     return parseInt(window.navigator.appVersion.match(/Chrome\/(.*?) /)[1].split(".")[0]);
   }
 
+  function isNWApp() {
+    return (typeof require === "function") && (typeof require('nw.gui') !== "undefined");
+  }
+
+  function isChromeWebApp() {
+    return ((typeof chrome === "object") && chrome.app && chrome.app.window);
+  }
+
+  function isProgressiveWebApp() {
+    return !isNWApp() && !isChromeWebApp() && window && window.matchMedia && window.matchMedia('(display-mode: standalone)').matches;
+  }
+
+  function hasNativeTitleBar() {
+    return !isNWApp() && !isChromeWebApp();
+  }
+
   function escapeHTML(text, escapeSpaces)
   {
     escapeSpaces = typeof escapeSpaces !== 'undefined' ? escapeSpaces : true;
@@ -174,16 +190,24 @@
       return callback();
     }
 
-    var  receivedData = "";
+    var receivedData = "";
     var prevReader = Espruino.Core.Serial.startListening(function (readData) {
       var bufView = new Uint8Array(readData);
       for(var i = 0; i < bufView.length; i++) {
         receivedData += String.fromCharCode(bufView[i]);
       }
       if (receivedData[receivedData.length-1] == ">") {
-        console.log("Received a prompt after sending newline... good!");
-        clearTimeout(timeout);
-        nextStep();
+        if (receivedData.substr(-6)=="debug>") {
+          console.log("Got debug> - sending Ctrl-C to break out and we'll be good");
+          Espruino.Core.Serial.write('\x03');
+        } else {
+          if (receivedData == "\r\n=undefined\r\n>") 
+            receivedData=""; // this was just what we expected - so ignore it
+            
+          console.log("Received a prompt after sending newline... good!");
+          clearTimeout(timeout);
+          nextStep();
+        }
       }
     });
     // timeout in case something goes wrong...
@@ -194,7 +218,11 @@
       console.log("No Prompt found, got "+JSON.stringify(receivedData[receivedData.length-1])+" - issuing Ctrl-C to try and break out");
       Espruino.Core.Serial.write('\x03');
       hadToBreak = true;
-      nextStep();
+      timeout = setTimeout(function() {
+        console.log("Still no prompt - issuing another Ctrl-C");
+        Espruino.Core.Serial.write('\x03');
+        nextStep();
+      },500);
     },500);
     // when we're done...
     var nextStep = function() {
@@ -251,7 +279,7 @@
       };
 
       // Don't Ctrl-C, as we've already got ourselves a prompt with Espruino.Core.Utils.getEspruinoPrompt
-      Espruino.Core.Serial.write('\x10console.log("<","<<",JSON.stringify('+expressionToExecute+'),">>",">")\n');
+      Espruino.Core.Serial.write('\x10print("<","<<",JSON.stringify('+expressionToExecute+'),">>",">")\n');
 
       var maxTimeout = 20; // 10 secs
       var timeoutCnt = 0;
@@ -264,7 +292,7 @@
           // No data in 1 second
           // OR we keep getting data for > maxTimeout seconds
           clearInterval(timeout);
-          console.warn("No result found - just got "+JSON.stringify(receivedData));
+          console.warn("No result found for "+JSON.stringify(expressionToExecute)+" - just got "+JSON.stringify(receivedData));
           nextStep(undefined);
         }
       }, 500);
@@ -274,7 +302,10 @@
       Espruino.Core.Utils.getEspruinoPrompt(function() {
         getProcessInfo(expressionToExecute, callback);
       });
-    } else console.error("executeExpression called when not connected!");
+    } else {
+      console.error("executeExpression called when not connected!");
+      callback(undefined);
+    }
   };
 
   function versionToFloat(version) {
@@ -330,7 +361,7 @@
 
             require(m).get(http_options, function(res) {
               if (res.statusCode != 200) {
-                console.error("Espruino.Core.Utils.getURL: got HTTP status code "+res.statusCode+" for "+url);
+                console.log("Espruino.Core.Utils.getURL: got HTTP status code "+res.statusCode+" for "+url);
                 return callback(undefined);
               }
               var data = "";
@@ -408,11 +439,56 @@
     fileLoader.click();
   }
 
+  /** Bluetooth device names that we KNOW run Espruino */
+  function recognisedBluetoothDevices() {
+    return [
+       "Puck.js", "Espruino", "Badge", "Thingy", "RuuviTag"
+    ];
+  }
+
+  /** If we can't find service info, add devices
+  based only on their name */
+  function isRecognisedBluetoothDevice(name) {
+    if (!name) return false;
+    var devs = recognisedBluetoothDevices();
+    for (var i=0;i<devs.length;i++)
+      if (name.substr(0, devs[i].length) == devs[i])
+        return true;
+    return false;
+  }
+
+
+  function getVersion(callback) {
+    var xmlhttp = new XMLHttpRequest();
+    xmlhttp.open('GET', 'manifest.json');
+    xmlhttp.onload = function (e) {
+        var manifest = JSON.parse(xmlhttp.responseText);
+        callback(manifest.version);
+    };
+    xmlhttp.send(null);
+  }
+
+  function getVersionInfo(callback) {
+    getVersion(function(version) {
+      var platform = "Web App";
+      if (isNWApp())
+        platform = "NW.js Native App";
+      if (isChromeWebApp())
+        platform = "Chrome App";
+
+      callback(platform+", v"+version);
+    });
+  }
+
   Espruino.Core.Utils = {
       init : init,
       isWindows : isWindows,
       isAppleDevice : isAppleDevice,
       getChromeVersion : getChromeVersion,
+      isNWApp : isNWApp,
+      isChromeWebApp : isChromeWebApp,
+      isProgressiveWebApp : isProgressiveWebApp,
+      hasNativeTitleBar : hasNativeTitleBar,
       escapeHTML : escapeHTML,
       fixBrokenCode : fixBrokenCode,
       getSubString : getSubString,
@@ -427,6 +503,10 @@
       getJSONURL : getJSONURL,
       isURL : isURL,
       needsHTTPS : needsHTTPS,
-      fileOpenDialog : fileOpenDialog
+      fileOpenDialog : fileOpenDialog,
+      recognisedBluetoothDevices : recognisedBluetoothDevices,
+      isRecognisedBluetoothDevice : isRecognisedBluetoothDevice,
+      getVersion : getVersion,
+      getVersionInfo : getVersionInfo
   };
 }());

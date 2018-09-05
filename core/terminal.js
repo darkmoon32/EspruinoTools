@@ -59,13 +59,36 @@
     var terminal = document.getElementById("terminal");
     var terminalfocus = document.getElementById("terminalfocus");
 
-    // Populate terminal
-    $.get("data/terminal_initial.html", function (data){
-      terminal.innerHTML = data;
-      $(".tour_link").click(function(e) {
-        e.preventDefault();
-        $("#icon-tour").click();
+    var html = "";
+    html+='<div style="max-width:400px;margin:auto;">\n';
+    html+='  <p><a href="http://www.espruino.com/Web+IDE" target="_blank"><img src="img/ide_logo.png" width="299" height="96" alt="Espruino IDE"/></a></p>\n';
+    html+='  <p id="versioninfo" style="text-align:right"></p>\n';
+    html+='  <p style="text-align:center;font-weight:bold">A Code Editor and Terminal for <a href="http://www.espruino.com" target="_blank">Espruino JavaScript Microcontrollers</a></p>\n';
+    html+='  <p>Try the <a class="tour_link" href="#">guided tour</a> and <a href="http://www.espruino.com/Quick+Start" target="_blank">getting started</a> guide for more information, tutorials and example projects.</p>\n';
+    html+='  <div id="terminalnews"></div>\n';
+    html+='  <p>Espruino is <a href="https://github.com/espruino" target="_blank">Open Source</a>.\n';
+    html+='Please support us by <a href="http://www.espruino.com/Donate" target="_blank">donating</a> or\n';
+    html+='  <a href="http://www.espruino.com/Order" target="_blank">buying an official board</a>.</p>\n';
+    html+='  <p style="text-align:right">\n'
+    html+='    <a href="http://twitter.com/Espruino" target="_blank"><img src="img/icon_twitter.png" width="16" height="16" alt="Follow on Twitter"/></a>\n';
+    html+='    <a href="http://youtube.com/subscription_center?add_user=espruino" target="_blank"><img src="img/icon_youtube.png" width="44" height="16" alt="Subscribe on YouTube"/></a>\n';
+    html+='    <a href="https://www.patreon.com/espruino" target="_blank"><img src="img/icon_patreon.png" width="45" height="16" alt="Support on Patreon"/></a>\n';
+    html+='  </p>\n';
+    html+='</div>\n';
+
+    terminal.innerHTML = html;
+    Espruino.Core.Utils.getVersionInfo(function(v) {
+      $("#versioninfo").html(v);
+
+      var r = 0|(Math.random()*1000000);
+      $.get("https://www.espruino.com/ide/news.html?v="+encodeURIComponent(v.replace(/[ ,]/g,"")+"&r="+r), function (data){
+        $("#terminalnews").html(data);
       });
+    });
+
+    $(".tour_link").click(function(e) {
+      e.preventDefault();
+      $("#icon-tour").click();
     });
 
     var mouseDownTime = Date.now();
@@ -246,15 +269,24 @@
 
     Espruino.addProcessor("connected", function(data, callback) {
       grabSerialPort();
-      outputDataHandler("\r\nConnected\r\n>");
       terminal.classList.add("terminal--connected");
       callback(data);
     });
     Espruino.addProcessor("disconnected", function(data, callback) {
-      outputDataHandler("\r\nDisconnected\r\n");
-      terminal.classList.remove("terminal--connected");
+      // carriage return, clear to right - remove prompt, add newline
+-      outputDataHandler("\n");
+      terminal.classList.remove("terminal--connected");      
       callback(data);
     });
+    Espruino.addProcessor("notification", function(data, callback) {
+      var elementClass = "terminal-status-"+data.type;
+      var line = termCursorY;
+      if (!termExtraText[line]) termExtraText[line]="";
+      termExtraText[line] += '<div class="terminal-status-container"><div class="terminal-status '+elementClass+'">'+data.msg+'</div></div>';
+      updateTerminal();
+      callback(data);
+    });
+
   };
 
   /// send the given characters as if they were typed
@@ -431,8 +463,9 @@
            case 66: termCursorY++; while (termCursorY >= termText.length) termText.push(""); break;  // down FIXME should add extra lines in...
            case 67: termCursorX++; break; // right
            case 68: if (termCursorX > 0) termCursorX--; break; // left
-           case 74: termText[termCursorY] = termText[termCursorY].substr(0,termCursorX);
-                    termText = termText.slice(0,termCursorY+1);   break; // Delete to right + down
+           case 74: termText[termCursorY] = termText[termCursorY].substr(0,termCursorX); // Delete to right + down
+                    termText = termText.slice(0,termCursorY+1);  
+                    break; 
            case 75: termText[termCursorY] = termText[termCursorY].substr(0,termCursorX); break; // Delete to right
          }
        }
@@ -564,15 +597,13 @@
     return termText[line];
   };
 
-  function addNotification(text) {
+  function addNotification(text, type) {
     var line = getInputLine(0);
     line = (line===undefined)?0:line.line;
     if (!termExtraText[line]) termExtraText[line]="";
     termExtraText[line] += '<div class="notification_text">'+text+'</div>';
     updateTerminal();
   }
-
-
 
   Espruino.Core.Terminal = {
       init : init,

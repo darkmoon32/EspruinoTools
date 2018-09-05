@@ -2,6 +2,48 @@
 /* Entrypoint for node module command-line app. Not used for Web IDE */
 var fs = require("fs");
 
+function getHelp() {
+  return [
+   "USAGE: espruino ...options... [file_to_upload.js]",
+   "",
+   "  -h,--help                : Show this message",
+   "  -j [job.json]            : Load options from JSON job file - see configDefaults.json",
+   "                               Calling without a job filename creates a new job file ",
+   "                               named after the uploaded file",
+   "  -v,--verbose             : Verbose",
+   "  -q,--quiet               : Quiet - apart from Espruino output",
+   "  -m,--minify              : Minify the code before sending it",
+   "  -w,--watch               : If uploading a JS file, continue to watch it for",
+   "                               changes and upload again if it does.",
+   "  -p,--port /dev/ttyX",
+   "  -p,--port aa:bb:cc:dd:ee : Specify port(s) or device addresses to connect to",
+   "  -d deviceName            : Connect to the first device with a name containing deviceName",
+   "  -b baudRate              : Set the baud rate of the serial connection",
+   "                               No effect when using USB, default: 9600",
+   "  --no-ble                 : Disables Bluetooth Low Energy (using the 'noble' module)",
+   "  --list                   : List all available devices and exit",
+   "  --listconfigs            : Show all available config options and exit",
+   "  --config key=value       : Set internal Espruino config option",
+   "  -t,--time                : Set Espruino's time when uploading code",
+   "  -o out.js                : Write the actual JS code sent to Espruino to a file",
+   "  -ohex out.hex            : Write the JS code to a hex file as if sent by E.setBootCode",
+   "  -n                       : Do not connect to Espruino to upload code",
+   "  --board BRDNAME/BRD.json : Rather than checking on connect, use the given board name or file",
+   "  -f firmware.bin[:N]      : Update Espruino's firmware to the given file",
+   "                               Espruino must be in bootloader mode.",
+   "                               Optionally skip N first bytes of the bin file.",
+   "  -e command               : Evaluate the given expression on Espruino",
+   "                               If no file to upload is specified but you use -e,",
+   "                               Espruino will not be reset",
+   "",
+   "If no file, command, or firmware update is specified, this will act",
+   "as a terminal for communicating directly with Espruino. Press Ctrl-C",
+   "twice to exit.",
+   "",
+   "Please report bugs via https://github.com/espruino/EspruinoTools/issues",
+   ""]
+}
+
 //override default console.log
 var log = console.log;
 console.log = function() {
@@ -10,14 +52,21 @@ console.log = function() {
 }
 //Parse Arguments
 var args = {
- ports: []
+ ports: [],
+ config: {}
 };
 
 var isNextValidPort = function(next) {
  return next && next[0]!=='-' && next.indexOf(".js") == -1;
 }
+var isNextValidFileType = function(next, fileType) {
+ return next && next[0]!=='-' && next.indexOf(fileType) >= 0;
+}
 var isNextValidJSON = function(next) {
- return next && next[0]!=='-' && next.indexOf(".json") >= 0;
+ return isNextValidFileType(next, ".json");
+}
+var isNextValidHEX = function(next) {
+ return isNextValidFileType(next, ".hex");
 }
 var isNextValidJS = function(next) {
  return next && !isNextValidJSON(next) && next.indexOf(".js") >= 0;
@@ -40,14 +89,28 @@ for (var i=2;i<process.argv.length;i++) {
    else if (arg=="-n" || arg=="--nosend") args.nosend = true;
    else if (arg=="--no-ble") args.noBle = true;
    else if (arg=="--list") args.showDevices = true;
+   else if (arg=="--listconfigs") args.showConfigs = true;
    else if (arg=="-p" || arg=="--port") {
-     args.ports.push(next);
+     args.ports.push({type:"path",name:next});
      var j = (++i) + 1;
      while (isNextValidPort(process.argv[j])) {
-       args.ports.push(process.argv[j++]);
+       args.ports.push({type:"path",name:process.argv[j++]});
        i++;
      }
      if (!isNextValidPort(next)) throw new Error("Expecting a port argument to -p, --port");
+   } else if (arg=="-d") {
+     i++; args.ports.push({type:"name",name:next});
+     if (!isNextValid(next)) throw new Error("Expecting a name argument to -d");
+   } else if (arg=="--config") {
+     i++;
+     if (!next || next.indexOf("=")==-1) throw new Error("Expecting a key=value argument to --config");
+     var kidx = next.indexOf("=");
+     try {
+       args.config[next.substr(0,kidx)] = JSON.parse(next.substr(kidx+1));
+     } catch (e) {
+       // treat as a string
+       args.config[next.substr(0,kidx)] = next.substr(kidx+1);
+     }
    } else if (arg=="-e") {
      i++; args.expr = next;
      if (!isNextValid(next)) throw new Error("Expecting an expression argument to -e");
@@ -60,6 +123,9 @@ for (var i=2;i<process.argv.length;i++) {
    } else if (arg=="-o") {
      i++; args.outputJS = next;
      if (!isNextValidJS(next)) throw new Error("Expecting a JS filename argument to -o");
+   } else if (arg=="-ohex") {
+     i++; args.outputHEX = next;
+     if (!isNextValidHEX(next)) throw new Error("Expecting a .hex file argument to -ohex");
    } else if (arg=="-f") {
      i++; var arg = next;
      if (!isNextValid(next)) throw new Error("Expecting a filename argument to -f");
@@ -67,6 +133,9 @@ for (var i=2;i<process.argv.length;i++) {
      args.updateFirmware = arg[0];
      args.firmwareFlashOffset = parseInt(arg[1] || '0');
      if (isNaN(args.firmwareFlashOffset)) throw new Error("Expecting a numeric offset for -f");
+   } else if (arg=="--board") {
+     i++; args.board = next;
+     if (!isNextValid(next)) throw new Error("Expecting an argument to --board");
    } else throw new Error("Unknown Argument '"+arg+"', try --help");
  } else {
    if ("file" in args)
@@ -91,7 +160,7 @@ if (args.color) {
 }
 //this is called after Espruino tools are loaded, and
 //sets up configuration as requested by the command-line options
-function setupConfig(Espruino) {
+function setupConfig(Espruino, callback) {
  if (args.minify)
    Espruino.Config.MINIFICATION_LEVEL = "ESPRIMA";
  if (args.baudRate && !isNaN(args.baudRate))
@@ -107,6 +176,126 @@ function setupConfig(Espruino) {
  if (args.espruino) {  // job file injections
    for (var key in args.espruino) Espruino.Config[key] = args.espruino[key];
  }
+ if (args.outputHEX) {
+   log("-ohex used - enabling MODULE_AS_FUNCTION");
+   Espruino.Config.MODULE_AS_FUNCTION = true;
+ }
+ if (args.config) {
+   for (var key in args.config) {
+     console.log("Command-line option set Espruino.Config."+key+" to "+JSON.stringify(args.config[key]));
+     Espruino.Config[key] = args.config[key];
+   }
+ }
+ if (args.showConfigs) {
+   Espruino.Core.Config.getSections().forEach(function(section) {
+     log(" "+section.name);
+     log("==================================".substr(0,section.name.length+2));
+     log("");
+     if (section.description) {
+       log(section.description);
+       log("");
+     }
+     var configItems = Espruino.Core.Config.data;
+     for (var configName in configItems) {
+       var configItem = configItems[configName];
+       if (configItem.section == section.name) {
+         var d = configItem.name+" ("+configName+")";
+         log(d);
+         log("-------------------------------------------------------------------------------".substr(0,d.length+2));
+         if (configItem.description) log(configItem.description);
+         log("Type: "+JSON.stringify(configItem.type,null,2));
+         log("Default: --config "+configName+"="+configItem.defaultValue);
+         log("Current: --config "+configName+"="+Espruino.Config[configName]);
+         log("");
+       }
+     }
+     log("");
+   });
+   process.exit(1);
+   //Espruino.Core.Config.getSection(sectionName);
+ }
+ if (args.board) {
+   log("Explicit board JSON supplied: "+JSON.stringify(args.board));
+   Espruino.Config.ENV_ON_CONNECT = false;
+   var env = Espruino.Core.Env.getData();
+   env.BOARD = args.board;
+   if (args.board.indexOf(".")>=0) {
+     var data = JSON.parse(require("fs").readFileSync(args.board).toString());
+     for (var key in data)
+       env[key] = data[key];
+     Espruino.callProcessor("boardJSONLoaded", env, function() {
+       console.log("Manual board JSON load complete");
+       callback();
+     });
+   } else { // download the JSON
+     Espruino.Plugins.BoardJSON.loadJSON(env, Espruino.Config.BOARD_JSON_URL+"/"+env.BOARD+".json", function() {
+       console.log("Manual board JSON load complete");
+       callback();
+     });
+   }
+ } else callback();
+}
+
+// convert the given code to intel hex at the given location
+function toIntelHex(code) {
+  var saveAddress, saveSize;
+  try {
+    saveAddress = Espruino.Core.Env.getData().chip.saved_code.address;
+    saveSize = Espruino.Core.Env.getData().chip.saved_code.page_size *
+               Espruino.Core.Env.getData().chip.saved_code.pages;
+  } catch (e) {
+    throw new Error("Board JSON not found or doesn't contain the relevant saved_code section");
+  }
+  var codeLen = code.length;
+  var endOfCode = 8+codeLen+1;
+  var maxSize = saveSize-16;
+  if (codeLen>maxSize) throw new Error("Too big ("+codeLen+" to fit in available flash: "+maxSize);
+  console.log("Using "+codeLen+" bytes out of "+maxSize);
+  var buffer = new Uint8Array(saveSize);
+  buffer.fill(0xFF); // fill with 255 for emptiness
+  // write code length
+  buffer[0] = codeLen&255;
+  buffer[1] = (codeLen>>8)&255;
+  buffer[2] = (codeLen>>16)&255;
+  buffer[3] = (codeLen>>24)&255;
+  // write end of code
+  buffer[4] = endOfCode&255;
+  buffer[5] = (endOfCode>>8)&255;
+  buffer[6] = (endOfCode>>16)&255;
+  buffer[7] = (endOfCode>>24)&255;
+  // write in our code
+  for (var i=0;i<codeLen;i++)
+    buffer[8+i] = code.charCodeAt(i);
+  buffer[8+codeLen] = 0; // null terminate
+  // write magic byte
+  buffer[saveSize-1] = 0xDE;
+  buffer[saveSize-2] = 0xAD;
+  buffer[saveSize-3] = 0xBE;
+  buffer[saveSize-4] = 0xEF;
+  // Now work out intel hex
+  function h(d) { var n = "0123456789ABCDEF"; return n[(d>>4)&15]+n[d&15]; }
+  function ihexline(bytes) {
+    bytes.push(1+(~bytes.reduce((a,b)=>a+b)&255)); // checksum - yay JS!
+    return ":"+bytes.map(h).join("")+"\r\n";
+  }
+  var lastHighAddr = -1;
+  var ihex = "";
+  for (var idx=0;idx<saveSize;idx+=16) {
+    var addr = saveAddress+idx;
+    var highAddr = addr>>16;
+    if (highAddr != lastHighAddr) {
+      lastHighAddr = highAddr;
+      ihex += ihexline([2,0,0,4,(highAddr>>8)&255,highAddr&255]);
+    }
+    var bytes = [
+      16/*bytes*/,
+      (addr>>8)&0xFF, addr&0xFF,
+      0]; // record type
+    for (var j=0;j<16;j++) bytes.push(buffer[idx+j]);
+    ihex += ihexline(bytes);
+  }
+  ihex += ":00000001FF\r\n";
+  return ihex;
 }
 
 // create a job file from commandline settings
@@ -146,40 +335,7 @@ if (!args.quiet) {
 
 //Help
 if (args.help) {
- ["USAGE: espruino ...options... [file_to_upload.js]",
-  "",
-  "  -h,--help                : Show this message",
-  "  -j [job.json]            : Load options from JSON job file - see configDefaults.json",
-  "                               Calling without a job filename creates a new job file ",
-  "                               named after the uploaded file",
-  "  -v,--verbose             : Verbose",
-  "  -q,--quiet               : Quiet - apart from Espruino output",
-  "  -m,--minify              : Minify the code before sending it",
-  "  -w,--watch               : If uploading a JS file, continue to watch it for",
-  "                               changes and upload again if it does.",
-  "  -p,--port /dev/ttyX",
-  "  -p,--port aa:bb:cc:dd:ee : Specify port(s) or device addresses to connect to",
-  "  -b baudRate              : Set the baud rate of the serial connection",
-  "                               No effect when using USB, default: 9600",
-  "  --no-ble                 : Disables Bluetooth Low Energy (using the 'bleat' module)",
-  "  --list                   : List all available devices and exit",
-  "  -t,--time                : Set Espruino's time when uploading code",
-  "  -o out.js                : Write the actual JS code sent to Espruino to a file",
-  "  -n                       : Do not connect to Espruino to upload code",
-  "  -f firmware.bin[:N]      : Update Espruino's firmware to the given file",
-  "                               Espruino must be in bootloader mode.",
-  "                               Optionally skip N first bytes of the bin file.",
-  "  -e command               : Evaluate the given expression on Espruino",
-  "                               If no file to upload is specified but you use -e,",
-  "                               Espruino will not be reset",
-  "",
-  "If no file, command, or firmware update is specified, this will act",
-  "as a terminal for communicating directly with Espruino. Press Ctrl-C",
-  "twice to exit.",
-  "",
-  "Please report bugs via https://github.com/espruino/EspruinoTool/issues",
-  ""].
-   forEach(function(l) {log(l);});
+ getHelp().forEach(function(l) {log(l);});
  process.exit(1);
 }
 
@@ -197,12 +353,24 @@ function sendCode(callback) {
     code += args.expr+"\n";
   }
   if (code) {
+    var env = Espruino.Core.Env.getData();
+    if (!env.info || !env.info.builtin_modules) {
+      log("********************************************************************");
+      log("* No list of built-in modules found. If you get 'Module not found' *");
+      log("* messages for built-in modules you may want to connect to a board *");
+      log("* with '-p devicePath' or use '--board BOARDNAME'                  *");
+      log("********************************************************************");
+    }
     Espruino.callProcessor("transformForEspruino", code, function(code) {
       if (args.outputJS) {
         log("Writing output to "+args.outputJS);
         require("fs").writeFileSync(args.outputJS, code);
       }
-      if (! args.nosend)
+      if (args.outputHEX) {
+        log("Writing hex output to "+args.outputHEX);
+        require("fs").writeFileSync(args.outputHEX, toIntelHex(code));
+      }
+      if (!args.nosend)
         Espruino.Core.CodeWriter.writeToEspruino(code, callback);
       else
         callback();
@@ -213,8 +381,8 @@ function sendCode(callback) {
 }
 
 /* Connect and send file/expression/etc */
-function connect(port, exitCallback) {
-  if (!args.quiet) if (! args.nosend) log("Connecting to '"+port+"'");
+function connect(devicePath, exitCallback) {
+  if (!args.quiet) if (! args.nosend) log("Connecting to '"+devicePath+"'");
   var currentLine = "";
   var exitTimeout;
   Espruino.Core.Serial.startListening(function(data) {
@@ -234,7 +402,7 @@ function connect(port, exitCallback) {
    }
   });
   if (! args.nosend) {
-    Espruino.Core.Serial.open(port, function(status) {
+    Espruino.Core.Serial.open(devicePath, function(status) {
       if (status === undefined) {
         console.error("Unable to connect!");
         return exitCallback();
@@ -267,9 +435,30 @@ function connect(port, exitCallback) {
   }
 }
 
+function sendOnFileChanged() {
+  var busy = false;
+  var watcher = require("fs").watch(args.file, { persistent : false }, function(eventType) {
+    if (busy) return;
+    /* stop watching - some apps delete & recreate, so continuing
+     to watch would break */
+    if (watcher) watcher.close();
+    watcher = undefined;
+    busy = true;
+    console.log(args.file+" changed, reloading");
+    setTimeout(function() {
+      sendCode(function() {
+        console.log("File sent!");
+        busy = false;
+      });
+      // start watching again
+      sendOnFileChanged();
+    }, 500);
+  });
+}
+
 /* Connect and enter terminal mode */
-function terminal(port, exitCallback) {
-  if (!args.quiet) log("Connecting to '"+port+"'");
+function terminal(devicePath, exitCallback) {
+  if (!args.quiet) log("Connecting to '"+devicePath+"'");
   var hadCtrlC = false;
   var hadCR = false;
   process.stdin.setRawMode(true);
@@ -290,7 +479,7 @@ function terminal(port, exitCallback) {
       }
     }
   });
-  Espruino.Core.Serial.open(port, function(status) {
+  Espruino.Core.Serial.open(devicePath, function(status) {
     if (status === undefined) {
       console.error("Unable to connect!");
       return exitCallback();
@@ -309,6 +498,7 @@ function terminal(port, exitCallback) {
               process.stdout.write("\r\n");
               exitCallback();
             } else {
+              // if we had ctrl-c, but didn't receive anything
               setTimeout(function() {
                 if (hadCtrlC) process.stdout.write("\nPress Ctrl-C again to exit\n>");
               }, 200);
@@ -325,18 +515,7 @@ function terminal(port, exitCallback) {
 
     // figure out what code we need to send (if any)
     sendCode(function() {
-      if (args.watchFile) {
-        var busy = false;
-        require("fs").watch(args.file, { persistent : false,}, function(eventType) {
-          if (busy || eventType!='change') return;
-          busy = true;
-          console.log(args.file+" changed, reloading");
-          sendCode(function() {
-            console.log("Done!");
-            busy = false;
-          });
-        });
-      }
+      if (args.watchFile) sendOnFileChanged();
     });
 
    }, function() {
@@ -345,11 +524,39 @@ function terminal(port, exitCallback) {
    });
 }
 
+/* If the user's asked us to find a device by name, list
+all devices and search */
+function getPortPath(port, callback) {
+  if (port.type=="path") callback(port.name);
+  else if (port.type=="name") {
+    log("Searching for device named "+JSON.stringify(port.name));
+    var searchString = port.name.toLowerCase();
+    var timeout = 2;
+    Espruino.Core.Serial.getPorts(function cb(ports) {
+      //log(JSON.stringify(ports,null,2));
+      var found = ports.find(function(p) { return p.description.toLowerCase().indexOf(searchString)>=0; });
+      if (found) {
+        log("Found "+JSON.stringify(found.description)+" ("+JSON.stringify(found.path)+")");
+        callback(found.path);
+      } else {
+        if (timeout-- > 0) // try again - sometimes BLE devices take a while
+          Espruino.Core.Serial.getPorts(cb);
+        else {
+         log("Port named "+JSON.stringify(port.name)+" not found");
+         process.exit(1);
+       }
+      }
+    });
+  } else throw new Error("Unknown port type! "+JSON.stringify(port));
+}
+
 function startConnect() {
   if ((!args.file && !args.updateFirmware && !args.expr) || (args.file && args.watchFile)) {
     if (args.ports.length != 1)
       throw new Error("Can only have one port when using terminal mode");
-    terminal(args.ports[0], function() { process.exit(0); });
+    getPortPath(args.ports[0], function(path) {
+      terminal(path, function() { process.exit(0); });
+    });
   } else {
     //closure for stepping through each port
     //and connect + upload (use timeout callback [iterate] for proceeding)
@@ -358,44 +565,55 @@ function startConnect() {
       this.idx = 0;
       this.connect = connect;
       this.iterate = function() {
-        (idx>=ports.length?process.exit(0):connect(ports[idx++],iterate));
-      }
+        if (idx>=ports.length) process.exit(0);
+        else getPortPath(ports[idx++], function(path) {
+          connect(path,iterate);
+        });
+      };
       iterate();
     })(args.ports, connect);
   }
 }
 
 function main() {
-  setupConfig(Espruino);
-  if (args.job==="") makeJobFile(Espruino.Config);
-  if (args.ports.length == 0 || args.showDevices) {
-    console.log("Searching for serial ports...");
-    Espruino.Core.Serial.getPorts(function(ports) {
-      // If we've been asked to list all devices, do it and exit
-      if (args.showDevices) {
-        /* Note - we want to search again because some things
-        like `noble` won't catch everything on the first try */
-        Espruino.Core.Serial.getPorts(function(ports) {
-          log("PORTS:\n  "+ports.map(function(p) {
-            if (p.description) return p.path + " ("+p.description+")";
-            return p.path;
-          }).join("\n  "));
-          process.exit(0);
-        });
-        return;
-      }
-      console.log("PORTS:\n  "+ports.map(function(p) {
-        if (p.description) return p.path + " ("+p.description+")";
-        return p.path;
-      }).join("\n  "));
-      if (ports.length>0) {
-        if (! args.nosend) log("Using first port, "+JSON.stringify(ports[0]));
-        args.ports = [ports[0].path];
-        startConnect();
-      } else
-        throw new Error("No Ports Found");
-    });
-  } else startConnect();
+  setupConfig(Espruino, function() {
+    if (args.job==="") makeJobFile(Espruino.Config);
+    if (args.ports.length == 0 && (args.outputJS || args.outputHEX)) {
+      console.log("No port supplied, but output file listed - not connecting");
+      args.nosend = true;
+      sendCode(function() {
+        log("File written. Exiting.");
+        process.exit(1);
+      });
+    } else if (args.ports.length == 0 || args.showDevices) {
+      console.log("Searching for serial ports...");
+      Espruino.Core.Serial.getPorts(function(ports) {
+        // If we've been asked to list all devices, do it and exit
+        if (args.showDevices) {
+          /* Note - we want to search again because some things
+          like `noble` won't catch everything on the first try */
+          Espruino.Core.Serial.getPorts(function(ports) {
+            log("PORTS:\n  "+ports.map(function(p) {
+              if (p.description) return p.path + " ("+p.description+")";
+              return p.path;
+            }).join("\n  "));
+            process.exit(0);
+          });
+          return;
+        }
+        console.log("PORTS:\n  "+ports.map(function(p) {
+          if (p.description) return p.path + " ("+p.description+")";
+          return p.path;
+        }).join("\n  "));
+        if (ports.length>0) {
+          if (! args.nosend) log("Using first port, "+JSON.stringify(ports[0]));
+          args.ports = [{type:"path",name:ports[0].path}];
+          startConnect();
+        } else
+          throw new Error("No Ports Found");
+      });
+    } else startConnect();
+  });
 }
 
 // Start up

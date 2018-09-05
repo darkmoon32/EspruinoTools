@@ -11,7 +11,7 @@
   try {
     noble = require('noble');
   } catch (e) {
-    console.log("'noble' module couldn't be loaded, no node.js Bluetooth Low Energy\n", e);
+    console.log("Noble: module couldn't be loaded, no node.js Bluetooth Low Energy\n", e);
     // super nasty workaround for https://github.com/sandeepmistry/noble/issues/502
     process.removeAllListeners('exit');
     return;
@@ -24,7 +24,6 @@
   var initialised = false;
   var errored = false;
   var scanWhenInitialised = undefined;
-  var firstGetPortsCall = true;
 
   function str2buf(str) {
     var buf = new Buffer(str.length);
@@ -73,29 +72,40 @@
 
 
   noble.on('stateChange', function(state) {
+    console.log("Noble: stateChange -> "+state);
     if (state=="poweredOn") {
       if (Espruino.Config.WEB_BLUETOOTH) {
         // Everything has already initialised, so we must disable
         // web bluetooth this way instead
-        console.log("Disable Web Bluetooth as we have Noble instead");
+        console.log("Noble: Disable Web Bluetooth as we have Noble instead");
         Espruino.Config.WEB_BLUETOOTH = false;
       }
       initialised = true;
+      /* if getPorts was called before initialisation, be sure
+      to wait for stuff to arrive before just calling back
+      with nothing - we're in the CLI */
       if (scanWhenInitialised) {
-        getPorts(scanWhenInitialised);
+        var scb = scanWhenInitialised;
         scanWhenInitialised = undefined;
+        getPorts(function() {
+          setTimeout(function() {
+            getPorts(scb);
+          }, 1500);
+        });        
       }
     }
     if (state=="poweredOff") initialised = false;
   });
   // if we didn't initialise for whatever reason, keep going anyway
   setTimeout(function() {
+    if (initialised) return;
+    console.log("Noble: Didn't initialise in 10 seconds, disabling.");
     errored = true;
     if (scanWhenInitialised) {
       scanWhenInitialised([]);
       scanWhenInitialised = undefined;
     }
-  }, 1000);
+  }, 10000);
 
   noble.on('discover', function(dev) {
     if (!dev.advertisement) return;
@@ -104,63 +114,56 @@
     var name = dev.advertisement.localName;
     var hasUartService = dev.advertisement.serviceUuids.indexOf(NORDIC_SERVICE)>=0;
     if (hasUartService ||
-        (name &&
-          (name.substr(0, 7) == "Puck.js" ||
-           name.substr(0, 8) == "Espruino"))) {
-      console.log("Found UART device:", name, dev.address);
+        Espruino.Core.Utils.isRecognisedBluetoothDevice(name)) {
+      console.log("Noble: Found UART device:", name, dev.address);
       newDevices.push({ path: dev.address, description: name, type : "bluetooth" });
       btDevices[dev.address] = dev;
-    } else console.log("Found device:", name, dev.address);
+    } else console.log("Noble: Found device:", name, dev.address);
   });
 
 
   var getPorts = function (callback) {
     if (errored || !Espruino.Config.BLUETOOTH_LOW_ENERGY) {
+      console.log("Noble: getPorts - disabled");
       callback([]);
     } else if (!initialised) {
+      console.log("Noble: getPorts - not initialises");
       // if not initialised yet, wait until we are
       if (scanWhenInitialised) scanWhenInitialised([]);
       scanWhenInitialised = callback;
     } else { // all ok - let's go!
+      // Ensure we're scanning
       if (scanStopTimeout) {
         clearTimeout(scanStopTimeout);
         scanStopTimeout = undefined;
       } else {
-        console.log("noble starting scan");
+        console.log("Noble: Starting scan");
         lastDevices = [];
         newDevices = [];
         noble.startScanning([], true);
       }
-      /* we want the first call to return immediately, so if the
-      user isn't after Bluetooth everything still works fast */
-      if (firstGetPortsCall) {
-        firstGetPortsCall = false;
-        return callback([]);
-      }
-
-      setTimeout(function() {
-        scanStopTimeout = setTimeout(function () {
-          scanStopTimeout = undefined;
-          console.log("noble stopping scan");
-          noble.stopScanning();
-        }, 3000);
-        // report back device list from both the last scan and this one...
-        var reportedDevices = [];
-        newDevices.forEach(function (d) {
-          reportedDevices.push(d);
+      scanStopTimeout = setTimeout(function () {
+        scanStopTimeout = undefined;
+        console.log("Noble: Stopping scan");
+        noble.stopScanning();
+      }, 3000);
+      // report back device list from both the last scan and this one...
+      var reportedDevices = [];
+      newDevices.forEach(function (d) {
+        reportedDevices.push(d);
+      });
+      lastDevices.forEach(function (d) {
+        var found = false;
+        reportedDevices.forEach(function (dv) {
+          if (dv.path == d.path) found = true;
         });
-        lastDevices.forEach(function (d) {
-          var found = false;
-          reportedDevices.forEach(function (dv) {
-            if (dv.path == d.path) found = true;
-          });
-          if (!found) reportedDevices.push(d);
-        });
-        reportedDevices.sort(function (a, b) { return a.path.localeCompare(b.path); });
-        lastDevices = newDevices;
-        newDevices = [];
-        callback(reportedDevices);
-      }, 1500);
+        if (!found) reportedDevices.push(d);
+      });
+      reportedDevices.sort(function (a, b) { return a.path.localeCompare(b.path); });
+      lastDevices = newDevices;
+      newDevices = [];
+      //console.log("Noble: reportedDevices",reportedDevices);
+      callback(reportedDevices);
     }
   };
 
@@ -171,7 +174,7 @@
     if (scanStopTimeout) {
       clearTimeout(scanStopTimeout);
       scanStopTimeout = undefined;
-      console.log("noble stopping scan");
+      console.log("Noble: Stopping scan (openSerial)");
       noble.stopScanning();
     }
 
@@ -270,7 +273,7 @@
   // ----------------------------------------------------------
 
   Espruino.Core.Serial.devices.push({
-    "name" : "Noble",
+    "name" : "Noble Bluetooth LE",
     "init": init,
     "getPorts": getPorts,
     "open": openSerial,

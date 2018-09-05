@@ -18,7 +18,7 @@
       name : "Board JSON URL",
       description : "Where to search online for board JSON files - these contain links to up to date firmware as well as detailed information about the board's hardware",
       type : "string",
-      defaultValue : "https://gitlab.fai.utb.cz/jurenat/espruino-description-files/raw/master"
+      defaultValue : "https://raw.githubusercontent.com/darkmoon32/espruino-description-files/master/"
     });
     
     

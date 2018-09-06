@@ -45,9 +45,9 @@ Author: Patrick Van Oosterwijck (patrick@silicognition.com)
         s = s.trim();
         if (s.length) portList.push({path:'TCP/IP: '+s, description:"Network connection", type:"socket"});
       })
-      callback(portList);
+      callback(portList, true/*instantPorts*/);
     } else
-      callback();
+      callback(undefined, true/*instantPorts*/);
   };
 
   var openSerial=function(serialPort, openCallback, receiveCallback, disconnectCallback) {
@@ -80,16 +80,6 @@ Author: Patrick Van Oosterwijck (patrick@silicognition.com)
     });
   };
 
-  var str2ab = function(str) {
-    var buf=new ArrayBuffer(str.length);
-    var bufView=new Uint8Array(buf);
-    for (var i=0; i<str.length; i++) {
-      bufView[i]=str.charCodeAt(i);
-    }
-    return buf;
-  };
-
-
   var closeSerial = function() {
     if (connectionInfo) {
       chrome.sockets.tcp.disconnect(connectionInfo.socketId,
@@ -102,7 +92,7 @@ Author: Patrick Van Oosterwijck (patrick@silicognition.com)
   };
 
   var writeSerial = function(data, callback) {
-    chrome.sockets.tcp.send(connectionInfo.socketId, str2ab(data), callback);
+    chrome.sockets.tcp.send(connectionInfo.socketId, Espruino.Core.Utils.stringToArrayBuffer(data), callback);
   };
 
   // ----------------------------------------------------------

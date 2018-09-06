@@ -3,7 +3,7 @@
   var isWindows = /^win/.test(process.platform);
   if (!isWindows) {
     console.log("Not on Windows, Winnus not needed");
-    return;  
+    return;
   }
   var winnus = undefined;
   try {
@@ -19,14 +19,6 @@
   var txInProgress = false;
   var onDisconnect;
 
-  function str2Uint8Array(str) {
-    var buf = new Uint8Array(str.length);
-    for (var i = 0; i < buf.length; i++) {
-      buf[i] = str.charCodeAt(i);
-    }
-    return buf;
-  }
-
   function init() {
 
   }
@@ -40,7 +32,7 @@
     } catch (e) {
       console.log(e);
     }
-    callback(devices);
+    callback(devices, false/*instantPorts*/);
   };
 
   var openSerial = function (serialPort, openCallback, receiveCallback, disconnectCallback) {
@@ -58,7 +50,7 @@
 
     try {
       winnus.connect(foundDevice, function(rxData) {
-        receiveCallback(str2Uint8Array(rxData).buffer);
+        receiveCallback(Espruino.Core.Utils.stringToArrayBuffer(rxData));
       });
       openCallback({}); // success!
     } catch (e) {
@@ -127,6 +119,6 @@
     "getPorts": getPorts,
     "open": openSerial,
     "write": writeSerial,
-    "close": closeSerial
+    "close": closeSerial,
   });
 })();

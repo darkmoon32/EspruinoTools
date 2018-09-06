@@ -186,6 +186,16 @@ function setupConfig(Espruino, callback) {
      Espruino.Config[key] = args.config[key];
    }
  }
+ if ( args.ports && args.ports.length ) {
+   Espruino.Config.SERIAL_TCPIP=args.ports
+    .filter(function(p) {
+      return p.name.substr(0,6) === "tcp://";
+    })
+    .map(function(p) {
+      return p.name.trim();
+    }
+   )
+ }
  if (args.showConfigs) {
    Espruino.Core.Config.getSections().forEach(function(section) {
      log(" "+section.name);
@@ -236,6 +246,32 @@ function setupConfig(Espruino, callback) {
  } else callback();
 }
 
+/* Write a file into a Uint8Array in the form that Espruino expects. Return the
+address of the next file.
+NOTE: On platforms with only a 64 bit write (STM32L4) this won't work */
+function setBufferFile(buffer, addr, filename, data) {
+  if (!typeof data=="string") throw "Expecting string";
+  if (addr&3) throw "Unaligned";
+  var fileSize = data.length;
+  var nextAddr = addr+16+((fileSize+3)&~3);
+  if (nextAddr>buffer.length) throw "File too big for buffer";
+  // https://github.com/espruino/Espruino/blob/master/src/jsflash.h#L30
+  // 'size'
+  buffer.set([fileSize&255, (fileSize>>8)&255,
+              (fileSize>>16)&255, (fileSize>>24)&255], addr);
+  // 'replacement' - none, since this is the only file
+  buffer.set([0xFF,0xFF,0xFF,0xFF], addr+4);
+  // 'filename', 8 bytes
+  buffer.set([0,0,0,0,0,0,0,0], addr+8);
+  for (var i=0;i<filename.length;i++)
+    buffer[addr+8+i] = filename.charCodeAt(i);
+  // Write the data in
+  for (var i=0;i<fileSize;i++)
+    buffer[16+i] = data.charCodeAt(i);
+  // return next addr
+  return nextAddr;
+}
+
 // convert the given code to intel hex at the given location
 function toIntelHex(code) {
   var saveAddress, saveSize;
@@ -246,32 +282,9 @@ function toIntelHex(code) {
   } catch (e) {
     throw new Error("Board JSON not found or doesn't contain the relevant saved_code section");
   }
-  var codeLen = code.length;
-  var endOfCode = 8+codeLen+1;
-  var maxSize = saveSize-16;
-  if (codeLen>maxSize) throw new Error("Too big ("+codeLen+" to fit in available flash: "+maxSize);
-  console.log("Using "+codeLen+" bytes out of "+maxSize);
   var buffer = new Uint8Array(saveSize);
   buffer.fill(0xFF); // fill with 255 for emptiness
-  // write code length
-  buffer[0] = codeLen&255;
-  buffer[1] = (codeLen>>8)&255;
-  buffer[2] = (codeLen>>16)&255;
-  buffer[3] = (codeLen>>24)&255;
-  // write end of code
-  buffer[4] = endOfCode&255;
-  buffer[5] = (endOfCode>>8)&255;
-  buffer[6] = (endOfCode>>16)&255;
-  buffer[7] = (endOfCode>>24)&255;
-  // write in our code
-  for (var i=0;i<codeLen;i++)
-    buffer[8+i] = code.charCodeAt(i);
-  buffer[8+codeLen] = 0; // null terminate
-  // write magic byte
-  buffer[saveSize-1] = 0xDE;
-  buffer[saveSize-2] = 0xAD;
-  buffer[saveSize-3] = 0xBE;
-  buffer[saveSize-4] = 0xEF;
+  setBufferFile(buffer, 0, ".bootcde", code);
   // Now work out intel hex
   function h(d) { var n = "0123456789ABCDEF"; return n[(d>>4)&15]+n[d&15]; }
   function ihexline(bytes) {
@@ -294,6 +307,7 @@ function toIntelHex(code) {
     for (var j=0;j<16;j++) bytes.push(buffer[idx+j]);
     ihex += ihexline(bytes);
   }
+  // END OF FILE marker (so don't copy this if you're trying to manually merge files!)
   ihex += ":00000001FF\r\n";
   return ihex;
 }
@@ -532,14 +546,14 @@ function getPortPath(port, callback) {
     log("Searching for device named "+JSON.stringify(port.name));
     var searchString = port.name.toLowerCase();
     var timeout = 2;
-    Espruino.Core.Serial.getPorts(function cb(ports) {
+    Espruino.Core.Serial.getPorts(function cb(ports, shouldCallAgain) {
       //log(JSON.stringify(ports,null,2));
-      var found = ports.find(function(p) { return p.description.toLowerCase().indexOf(searchString)>=0; });
+      var found = ports.find(function(p) { return p.description && p.description.toLowerCase().indexOf(searchString)>=0; });
       if (found) {
         log("Found "+JSON.stringify(found.description)+" ("+JSON.stringify(found.path)+")");
         callback(found.path);
       } else {
-        if (timeout-- > 0) // try again - sometimes BLE devices take a while
+        if (timeout-- > 0 && shouldCallAgain) // try again - sometimes BLE devices take a while
           Espruino.Core.Serial.getPorts(cb);
         else {
          log("Port named "+JSON.stringify(port.name)+" not found");
@@ -554,6 +568,7 @@ function startConnect() {
   if ((!args.file && !args.updateFirmware && !args.expr) || (args.file && args.watchFile)) {
     if (args.ports.length != 1)
       throw new Error("Can only have one port when using terminal mode");
+
     getPortPath(args.ports[0], function(path) {
       terminal(path, function() { process.exit(0); });
     });
@@ -587,18 +602,20 @@ function main() {
       });
     } else if (args.ports.length == 0 || args.showDevices) {
       console.log("Searching for serial ports...");
-      Espruino.Core.Serial.getPorts(function(ports) {
+      Espruino.Core.Serial.getPorts(function(ports, shouldCallAgain) {
+        function gotPorts(ports) {
+          log("PORTS:\n  "+ports.map(function(p) {
+            if (p.description) return p.path + " ("+p.description+")";
+            return p.path;
+          }).join("\n  "));
+          process.exit(0);
+        }
         // If we've been asked to list all devices, do it and exit
         if (args.showDevices) {
           /* Note - we want to search again because some things
           like `noble` won't catch everything on the first try */
-          Espruino.Core.Serial.getPorts(function(ports) {
-            log("PORTS:\n  "+ports.map(function(p) {
-              if (p.description) return p.path + " ("+p.description+")";
-              return p.path;
-            }).join("\n  "));
-            process.exit(0);
-          });
+          if (shouldCallAgain) Espruino.Core.Serial.getPorts(gotPorts);
+          else gotPorts(ports);
           return;
         }
         console.log("PORTS:\n  "+ports.map(function(p) {

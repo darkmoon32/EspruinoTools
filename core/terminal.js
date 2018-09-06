@@ -152,6 +152,7 @@
           }
         }
         terminalfocus.focus();
+        window.scrollTo(0,0); // as terminalfocus is offscreen, just in case force us back onscreen
         return;
       }
 
@@ -234,6 +235,23 @@
       if (e.keyCode == 13) ch = String.fromCharCode(13);
       if (e.ctrlKey) {
         if (e.keyCode == 'C'.charCodeAt(0)) ch = String.fromCharCode(3); // control C
+        if (e.keyCode == 'F'.charCodeAt(0)) {
+          // fullscreen
+          e.preventDefault();
+          var term = document.querySelector(".editor__canvas__terminal");
+          if (term.classList.contains("editor__canvas__fullscreen")) {
+            // was fullscreen - make windowed
+            term.classList.remove("editor__canvas__fullscreen");
+            document.querySelector(".editor--terminal").append(term)
+          } else {
+            term.classList.add("editor__canvas__fullscreen");
+            document.body.append(term);
+          }
+          // if we have a webcam it seems we need to start it playing again 
+          // after moving it 
+          var vid = document.querySelector("video");
+          if (vid) vid.play();
+        }
       }
       if (e.altKey) {
         if (e.keyCode == 13) ch = String.fromCharCode(27,10); // Alt enter
@@ -275,7 +293,7 @@
     Espruino.addProcessor("disconnected", function(data, callback) {
       // carriage return, clear to right - remove prompt, add newline
 -      outputDataHandler("\n");
-      terminal.classList.remove("terminal--connected");      
+      terminal.classList.remove("terminal--connected");
       callback(data);
     });
     Espruino.addProcessor("notification", function(data, callback) {
@@ -358,7 +376,7 @@
     // now write this to the screen
     var t = [];
     for (var y in termText) {
-      var line = termText[y];
+      var line = termText[y];      
       if (y == termCursorY) {
         var ch = Espruino.Core.Utils.getSubString(line,termCursorX,1);
         line = Espruino.Core.Utils.escapeHTML(
@@ -370,6 +388,12 @@
         // handle URLs
         line = line.replace(/(https?:\/\/[-a-zA-Z0-9@:%._\+~#=\/\?]+)/g, '<a href="$1" target="_blank">$1</a>');
       }
+      // detect inline images and link them in
+      var m = line.match(/data:image\/\w+;base64,[\w\+\/=]+/);
+      if (m) {
+        line = line.substr(0,m.index)+'<img class="terminal-inline-image" src="'+m[0]+'"/>'+line.substr(m.index+m[0].length);
+      }
+      
       // extra text is for stuff like tutorials
       if (termExtraText[y])
         line = termExtraText[y] + line;
@@ -385,8 +409,9 @@
         elements[y].html(line);
     }
     // now show the line where the cursor is
-    if (elements[termCursorY]!==undefined)
-      elements[termCursorY][0].scrollIntoView();
+    if (elements[termCursorY]!==undefined) {
+      terminal[0].scrollTop = elements[termCursorY][0].offsetTop;
+    }
     /* Move input box to the same place as the cursor, so Android devices
     keep that part of the screen in view */
     var cursor = document.getElementsByClassName("terminal__cursor");
@@ -429,6 +454,7 @@
         case 0xC2 : break; // UTF8 for <255 - ignore this
         default : {
           // Else actually add character
+          if (termText[termCursorY]===undefined) termText[termCursorY]="";
           termText[termCursorY] = trimRight(
               Espruino.Core.Utils.getSubString(termText[termCursorY],0,termCursorX) +
               String.fromCharCode(ch) +
@@ -464,8 +490,8 @@
            case 67: termCursorX++; break; // right
            case 68: if (termCursorX > 0) termCursorX--; break; // left
            case 74: termText[termCursorY] = termText[termCursorY].substr(0,termCursorX); // Delete to right + down
-                    termText = termText.slice(0,termCursorY+1);  
-                    break; 
+                    termText = termText.slice(0,termCursorY+1);
+                    break;
            case 75: termText[termCursorY] = termText[termCursorY].substr(0,termCursorX); break; // Delete to right
          }
        }

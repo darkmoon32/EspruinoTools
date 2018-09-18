@@ -201,9 +201,9 @@
           console.log("Got debug> - sending Ctrl-C to break out and we'll be good");
           Espruino.Core.Serial.write('\x03');
         } else {
-          if (receivedData == "\r\n=undefined\r\n>") 
+          if (receivedData == "\r\n=undefined\r\n>")
             receivedData=""; // this was just what we expected - so ignore it
-            
+
           console.log("Received a prompt after sending newline... good!");
           clearTimeout(timeout);
           nextStep();
@@ -259,7 +259,8 @@
           // strip out the text we found
           receivedData = receivedData.substr(0,startProcess) + receivedData.substr(endProcess+4);
           // Now stop time timeout
-          clearInterval(timeout);
+          if (timeout) clearInterval(timeout);
+          timeout = "cancelled";
           // Do the next stuff
           nextStep(result);
         } else if (startProcess >= 0) {
@@ -278,24 +279,30 @@
         callback(result);
       };
 
+      var timeout = undefined;
       // Don't Ctrl-C, as we've already got ourselves a prompt with Espruino.Core.Utils.getEspruinoPrompt
-      Espruino.Core.Serial.write('\x10print("<","<<",JSON.stringify('+expressionToExecute+'),">>",">")\n');
-
-      var maxTimeout = 20; // 10 secs
-      var timeoutCnt = 0;
-      var timeout = setInterval(function onTimeout(){
-        timeoutCnt++;
-        // if we're still getting data, keep waiting for up to 10 secs
-        if (hadDataSinceTimeout && timeoutCnt<maxTimeout) {
-          hadDataSinceTimeout = false;
-        } else if (timeoutCnt>2) {
-          // No data in 1 second
-          // OR we keep getting data for > maxTimeout seconds
-          clearInterval(timeout);
-          console.warn("No result found for "+JSON.stringify(expressionToExecute)+" - just got "+JSON.stringify(receivedData));
-          nextStep(undefined);
-        }
-      }, 500);
+      Espruino.Core.Serial.write('\x10print("<","<<",JSON.stringify('+expressionToExecute+'),">>",">")\n',
+                                 undefined, function() {
+        // now it's sent, wait for data
+        var maxTimeout = 10; // seconds - how long we wait if we're getting data
+        var minTimeout = 2; // seconds - how long we wait if we're not getting data
+        var pollInterval = 500; // milliseconds
+        var timeoutSeconds = 0;
+        if (timeout != "cancelled")
+          timeout = setInterval(function onTimeout(){
+          timeoutSeconds += pollInterval/1000;
+          // if we're still getting data, keep waiting for up to 10 secs
+          if (hadDataSinceTimeout && timeoutSeconds<maxTimeout) {
+            hadDataSinceTimeout = false;
+          } else if (timeoutSeconds > minTimeout) {
+            // No data yet...
+            // OR we keep getting data for > maxTimeout seconds
+            clearInterval(timeout);
+            console.warn("No result found for "+JSON.stringify(expressionToExecute)+" - just got "+JSON.stringify(receivedData));
+            nextStep(undefined);
+          }
+        }, pollInterval);
+      });
     }
 
     if(Espruino.Core.Serial.isConnected()){
@@ -387,6 +394,27 @@
     });
   }
 
+  /// Gets a URL as a Binary file, returning callback(err, ArrayBuffer)
+  var getBinaryURL = function(url, callback) {
+    console.log("Downloading "+url);
+    Espruino.Core.Status.setStatus("Downloading binary...");
+    var xhr = new XMLHttpRequest();
+    xhr.responseType = "arraybuffer";
+    xhr.addEventListener("load", function () {
+      if (xhr.status === 200) {
+        Espruino.Core.Status.setStatus("Done.");
+        var data = xhr.response;
+        callback(undefined,data);
+      } else
+        callback("Error downloading file - HTTP "+xhr.status);
+    });
+    xhr.addEventListener("error", function () {
+      callback("Error downloading file");
+    });
+    xhr.open("GET", url, true);
+    xhr.send(null);
+  };
+
   /// Gets a URL as JSON, and returns callback(data) or callback(undefined) on error
   function getJSONURL(url, callback) {
     getURL(url, function(d) {
@@ -442,7 +470,7 @@
   /** Bluetooth device names that we KNOW run Espruino */
   function recognisedBluetoothDevices() {
     return [
-       "Puck.js", "Espruino", "Badge", "Thingy", "RuuviTag"
+       "Puck.js", "Pixl.js", "MDBT42Q", "Espruino", "Badge", "Thingy", "RuuviTag", "iTracker"
     ];
   }
 
@@ -480,6 +508,43 @@
     });
   }
 
+  // Converts a string to an ArrayBuffer
+  function stringToArrayBuffer(str) {
+    var buf=new Uint8Array(str.length);
+    for (var i=0; i<str.length; i++) {
+      var ch = str.charCodeAt(i);
+      if (ch>=256) {
+        console.warn("stringToArrayBuffer got non-8 bit character - code "+ch);
+        ch = "?".charCodeAt(0);
+      }
+      buf[i] = ch;
+    }
+    return buf.buffer;
+  };
+
+  // Converts a string to a Buffer
+  function stringToBuffer(str) {
+    var buf = new Buffer(str.length);
+    for (var i = 0; i < buf.length; i++) {
+      buf.writeUInt8(str.charCodeAt(i), i);
+    }
+    return buf;
+  };
+
+  // Converts a DataView to an ArrayBuffer
+  function dataViewToArrayBuffer(str) {
+    var bufView = new Uint8Array(dv.byteLength);
+    for (var i = 0; i < bufView.length; i++) {
+      bufView[i] = dv.getUint8(i);
+    }
+    return bufView.buffer;
+  };
+
+  // Converts an ArrayBuffer to a string
+  function arrayBufferToString(str) {
+    return String.fromCharCode.apply(null, new Uint8Array(buf));
+  };
+
   Espruino.Core.Utils = {
       init : init,
       isWindows : isWindows,
@@ -500,6 +565,7 @@
       htmlTable : htmlTable,
       markdownToHTML : markdownToHTML,
       getURL : getURL,
+      getBinaryURL : getBinaryURL,
       getJSONURL : getJSONURL,
       isURL : isURL,
       needsHTTPS : needsHTTPS,
@@ -507,6 +573,10 @@
       recognisedBluetoothDevices : recognisedBluetoothDevices,
       isRecognisedBluetoothDevice : isRecognisedBluetoothDevice,
       getVersion : getVersion,
-      getVersionInfo : getVersionInfo
+      getVersionInfo : getVersionInfo,
+      stringToArrayBuffer : stringToArrayBuffer,
+      stringToBuffer : stringToBuffer,
+      dataViewToArrayBuffer : dataViewToArrayBuffer,
+      arrayBufferToString : arrayBufferToString,
   };
 }());

@@ -27,9 +27,12 @@
       type : "boolean",
       defaultValue : true
     });
+
   }
 
   function writeToEspruino(code, callback) {
+    /* hack around non-K&R code formatting that would have
+    broken Espruino CLI's bracket counting */
     code = reformatCode(code);
     if (code === undefined) return; // it should already have errored
 
@@ -47,8 +50,8 @@
 
       //console.log("Sending... "+data);
       Espruino.Core.Serial.write(code, true, function() {
-        // give 10 seconds for sending with save and 2 seconds without save
-        var count = Espruino.Config.SAVE_ON_SEND ? 100 : 20;
+        // give 5 seconds for sending with save and 2 seconds without save
+        var count = Espruino.Config.SAVE_ON_SEND ? 50 : 20;
         setTimeout(function cb() {
           if (Espruino.Core.Terminal!==undefined &&
               Espruino.Core.Terminal.getTerminalLine()!=">") {
@@ -56,7 +59,7 @@
             if (count>0) {
               setTimeout(cb, 100);
             } else {
-              Espruino.Core.Terminal.outputDataHandler("ERROR: Prompt not detected - upload failed. Trying to recover...\n");
+              Espruino.Core.Notifications.error("Prompt not detected - upload failed. Trying to recover...");
               Espruino.Core.Serial.write("\x03\x03echo(1)\n", false, callback);
             }
           } else {
@@ -72,13 +75,11 @@
      var APPLY_LINE_NUMBERS = false;
      var lineNumberOffset = 0;
      var ENV = Espruino.Core.Env.getData();
-     if (ENV) {
-       if (ENV.VERSION_MAJOR && ENV.VERSION_MINOR) {
-         if (ENV.VERSION_MAJOR>1 ||
-             ENV.VERSION_MINOR>=81.086) {
-           if (Espruino.Config.STORE_LINE_NUMBERS)
-             APPLY_LINE_NUMBERS = true;
-         }
+     if (ENV && ENV.VERSION_MAJOR && ENV.VERSION_MINOR) {
+       if (ENV.VERSION_MAJOR>1 ||
+           ENV.VERSION_MINOR>=81.086) {
+         if (Espruino.Config.STORE_LINE_NUMBERS)
+           APPLY_LINE_NUMBERS = true;
        }
      }
 
@@ -128,6 +129,7 @@
      */
     var lex = Espruino.Core.Utils.getLexer(code);
     var brackets = 0;
+    var curlyBrackets = 0;
     var statementBeforeBrackets = false;
     var statement = false;
     var varDeclaration = false;
@@ -158,7 +160,9 @@
 
       var previousBrackets = brackets;
       if (tok.str=="(" || tok.str=="{" || tok.str=="[") brackets++;
+      if (tok.str=="{") curlyBrackets++;
       if (tok.str==")" || tok.str=="}" || tok.str=="]") brackets--;
+      if (tok.str=="}") curlyBrackets--;
 
       if (brackets==0) {
         if (tok.str=="for" || tok.str=="if" || tok.str=="while" || tok.str=="function" || tok.str=="throw") {
@@ -188,20 +192,16 @@
       prematurely */
       if (previousBrackets==0 &&
           previousString.indexOf("\n")>=0 &&
-          previousString.indexOf("\x1B\x0A")<0)
+          previousString.indexOf("\x1B\x0A")<0) {
         previousString = "\n\x10";
-
-
-      if (brackets==0) {
-        /* For functions defined at the global scope, we want to shove
-         * an escape code before them that tells Espruino what their
-         * line number is */
-        if (APPLY_LINE_NUMBERS && tok.str=="function" && tok.lineNumber) {
+        // Apply line numbers to each new line sent, to aid debugger
+        if (APPLY_LINE_NUMBERS && tok.lineNumber) {
           // Esc [ 1234 d
           // This is the 'set line number' command that we're abusing :)
           previousString += "\x1B\x5B"+(tok.lineNumber+lineNumberOffset)+"d";
         }
       }
+
       // add our stuff back together
       resultCode += previousString+tokenString;
       // next

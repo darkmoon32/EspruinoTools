@@ -20,26 +20,11 @@
   var NORDIC_SERVICE = "6e400001b5a3f393e0a9e50e24dcca9e";
   var NORDIC_TX = "6e400002b5a3f393e0a9e50e24dcca9e";
   var NORDIC_RX = "6e400003b5a3f393e0a9e50e24dcca9e";
+  var NORDIC_TX_MAX_LENGTH = 20;
 
   var initialised = false;
   var errored = false;
   var scanWhenInitialised = undefined;
-
-  function str2buf(str) {
-    var buf = new Buffer(str.length);
-    for (var i = 0; i < buf.length; i++) {
-      buf.writeUInt8(str.charCodeAt(i), i);
-    }
-    return buf;
-  }
-
-  function dataview2ab(dv) {
-    var bufView = new Uint8Array(dv.byteLength);
-    for (var i = 0; i < bufView.length; i++) {
-      bufView[i] = dv.getUint8(i);
-    }
-    return bufView.buffer;
-  }
 
   function findByUUID(list, uuid) {
     for (var i=0;i<list.length;i++)
@@ -55,7 +40,6 @@
   var btDevice;
   var txCharacteristic;
   var rxCharacteristic;
-  var txDataQueue = undefined;
   var txInProgress = false;
   var scanStopTimeout = undefined;
 
@@ -91,10 +75,17 @@
           setTimeout(function() {
             getPorts(scb);
           }, 1500);
-        });        
+        });
       }
     }
-    if (state=="poweredOff") initialised = false;
+    if (state=="poweredOff") {
+      initialised = false;
+      if (scanWhenInitialised) {
+        var scb = scanWhenInitialised;
+        scanWhenInitialised = undefined;
+        scb(undefined, true/*instantPorts*/);
+      }
+    }
   });
   // if we didn't initialise for whatever reason, keep going anyway
   setTimeout(function() {
@@ -125,9 +116,9 @@
   var getPorts = function (callback) {
     if (errored || !Espruino.Config.BLUETOOTH_LOW_ENERGY) {
       console.log("Noble: getPorts - disabled");
-      callback([]);
+      callback([], true/*instantPorts*/);
     } else if (!initialised) {
-      console.log("Noble: getPorts - not initialises");
+      console.log("Noble: getPorts - not initialised");
       // if not initialised yet, wait until we are
       if (scanWhenInitialised) scanWhenInitialised([]);
       scanWhenInitialised = callback;
@@ -163,7 +154,7 @@
       lastDevices = newDevices;
       newDevices = [];
       //console.log("Noble: reportedDevices",reportedDevices);
-      callback(reportedDevices);
+      callback(reportedDevices, false/*instantPorts*/);
     }
   };
 
@@ -178,7 +169,6 @@
       noble.stopScanning();
     }
 
-    txDataQueue = undefined;
     txInProgress = false;
 
     console.log("BT> Connecting");
@@ -186,7 +176,6 @@
       txCharacteristic = undefined;
       rxCharacteristic = undefined;
       btDevice = undefined;
-      txDataQueue = undefined;
       txInProgress = false;
       disconnectCallback();
     });
@@ -234,40 +223,27 @@
   // Throttled serial write
   var writeSerial = function (data, callback) {
     if (txCharacteristic === undefined) return;
-    if (typeof txDataQueue != "undefined" || txInProgress) {
-      if (txDataQueue === undefined)
-        txDataQueue = "";
-      txDataQueue += data;
+
+    if (data.length>NORDIC_TX_MAX_LENGTH) {
+      console.error("BT> TX length >"+NORDIC_TX_MAX_LENGTH);
       return callback();
-    } else {
-      txDataQueue = data;
+    }
+    if (txInProgress) {
+      console.error("BT> already sending!");
+      return callback();
     }
 
-    function writeChunk() {
-      var chunk;
-      var CHUNKSIZE = 20;
-      if (txDataQueue.length <= CHUNKSIZE) {
-        chunk = txDataQueue;
-        txDataQueue = undefined;
-      } else {
-        chunk = txDataQueue.substr(0, CHUNKSIZE);
-        txDataQueue = txDataQueue.substr(CHUNKSIZE);
-      }
-      txInProgress = true;
-      console.log("BT> Sending " + JSON.stringify(chunk));
-      try {
-        txCharacteristic.write(str2buf(chunk), false, function() {
-          txInProgress = false;
-          if (txDataQueue)
-            writeChunk();
-        });
-      } catch (e) {
-        console.log("BT> ERROR " + e);
-        txDataQueue = undefined;
-      }
+    console.log("BT> send "+JSON.stringify(data));
+    txInProgress = true;
+    try {
+      txCharacteristic.write(Espruino.Core.Utils.stringToBuffer(data), false, function() {
+        txInProgress = false;
+        return callback();
+      });
+    } catch (e) {
+      console.log("BT> SEND ERROR " + e);
+      closeSerial();
     }
-    writeChunk();
-    return callback();
   };
 
   // ----------------------------------------------------------
@@ -278,6 +254,7 @@
     "getPorts": getPorts,
     "open": openSerial,
     "write": writeSerial,
-    "close": closeSerial
+    "close": closeSerial,
+    "maxWriteLength" : NORDIC_TX_MAX_LENGTH,
   });
 })();

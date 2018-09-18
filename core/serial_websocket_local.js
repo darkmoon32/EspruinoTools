@@ -4,50 +4,35 @@ Gordon Williams (gw@pur3.co.uk)
 (function() {
 
   if (typeof window == "undefined" || typeof WebSocket == undefined) return;
-  console.log("WebSockets support enabled - running in web browser");
-  
+  console.log("WebSocket localhost support (EspruinoHost) enabled - running in web browser");
+
   var WS_ENABLED = true;
   var ws;
   var wsConnecting = false;
   var wsConnectCallbacks = [];
-  var listOfDevices = [];  
+  var listOfDevices = [];
   var dataWrittenCallbacks = [];
   var listCallbacks = []; // callbacks for 'list' command
   var connectCallback;
   var disconnectCallback;
   var receiveCallback;
-  
-
-  var str2ab=function(str) {
-    var buf=new ArrayBuffer(str.length);
-    var bufView=new Uint8Array(buf);
-    for (var i=0; i<str.length; i++) {
-      var ch = str.charCodeAt(i);
-      if (ch>=256) {
-        console.warn("Attempted to send non-8 bit character - code "+ch);
-        ch = "?".charCodeAt(0);
-      }
-      bufView[i] = ch;
-    }
-    return buf;
-  };
 
   function ensureConnection(callback) {
     if (wsConnecting) {
       console.log("Waiting for Websocket connection - queueing");
       wsConnectCallbacks.push(callback);
       return;
-    }    
+    }
     if (ws) return callback();
-    if (!Espruino.Config.WEBSOCKET_URL) 
-      return callback("No websocket URL");      
+    if (!Espruino.Config.WEBSOCKET_URL)
+      return callback("No websocket URL");
     ws = new WebSocket(Espruino.Config.WEBSOCKET_URL);
     wsConnectCallbacks = [callback];
     wsConnecting = true;
     ws.onerror = function(event) {
       ws = undefined;
       wsConnecting = false;
-      callback("WebSocket error");      
+      callback("WebSocket error");
     };
     ws.onopen = function() {
       wsConnecting = false;
@@ -61,7 +46,7 @@ Gordon Williams (gw@pur3.co.uk)
       wsConnectCallbacks.forEach(function(cb) { cb(); });
     }
   }
-  
+
   function wsMessage(event) {
     console.log("Got "+event.data);
     try {
@@ -71,13 +56,13 @@ Gordon Williams (gw@pur3.co.uk)
         var portList = [];
         j.ports.forEach(function(port) {
           portList.push({
-            path: port.path, 
-            description: port.description, 
+            path: port.path,
+            description: port.description,
             type: port.interface
           });
         });
         listCallbacks.forEach(function(cb) {
-          cb(portList);
+          cb(portList, false/*instantPorts*/);
         });
         listCallbacks = [];
       } else if (j.type=="connect") {
@@ -92,7 +77,7 @@ Gordon Williams (gw@pur3.co.uk)
         }
       } else if (j.type=="read") {
         if (receiveCallback) {
-          receiveCallback(str2ab(j.data));
+          receiveCallback(Espruino.Core.Utils.stringToArrayBuffer(j.data));
         }
       } else if (j.type=="write") {
         dataWrittenCallbacks.forEach(function(cb) {
@@ -105,7 +90,7 @@ Gordon Williams (gw@pur3.co.uk)
       console.log("Error processing JSON response: "+event.data);
     }
   }
-  
+
   function wsClosed(event) {
     ws = undefined;
     console.log("WebSocket closed");
@@ -119,12 +104,12 @@ Gordon Williams (gw@pur3.co.uk)
       if (err) {
         WS_ENABLED = false;
         console.log("Couldn't connect to "+Espruino.Config.WEBSOCKET_URL+" - disabling websockets for this session");
-        return callback([]);
+        return callback([], false/*instantPorts*/);
       } else {
         listCallbacks.push(callback);
         ws.send(JSON.stringify({"type":"list"}));
       }
-    });    
+    });
   };
 
   var openSerial=function(serialPort, _connectCallback, _receiveCallback, _disconnectCallback) {
@@ -133,8 +118,8 @@ Gordon Williams (gw@pur3.co.uk)
       console.err("Tried to connect to "+serialPort+" but it didn't exist!");
       return openCallback(); // open failed
     }
-              
-    
+
+
     ensureConnection(function(err) {
       if (err) {
         return openCallback(); // open failed
@@ -143,13 +128,13 @@ Gordon Williams (gw@pur3.co.uk)
         disconnectCallback = _disconnectCallback;
         receiveCallback = _receiveCallback;
         ws.send(JSON.stringify({
-          "type":"connect", 
+          "type":"connect",
           "interface":device.interface,
           "path":device.path,
           "baud":parseInt(Espruino.Config.BAUD_RATE)
         }));
       }
-    });    
+    });
   };
 
   var closeSerial=function(callback) {
@@ -172,7 +157,7 @@ Gordon Williams (gw@pur3.co.uk)
     "write": writeSerial,
     "close": closeSerial,
   });
-  Espruino.Core.SerialWebSocket = {
+  Espruino.Core.SerialWebSocketLocal = {
     "init": function() {
       Espruino.Core.Config.add("WEBSOCKET_URL", {
         section : "Communications",

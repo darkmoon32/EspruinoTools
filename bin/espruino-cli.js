@@ -13,28 +13,37 @@ function getHelp() {
    "  -v,--verbose             : Verbose",
    "  -q,--quiet               : Quiet - apart from Espruino output",
    "  -m,--minify              : Minify the code before sending it",
+   "  -t,--time                : Set Espruino's time when uploading code",
    "  -w,--watch               : If uploading a JS file, continue to watch it for",
    "                               changes and upload again if it does.",
-   "  -p,--port /dev/ttyX",
-   "  -p,--port aa:bb:cc:dd:ee : Specify port(s) or device addresses to connect to",
+   "  -e command               : Evaluate the given expression on Espruino",
+   "                               If no file to upload is specified but you use -e,",
+   "                               Espruino will not be reset",
+   "  --sleep 10               : Sleep for the given number of seconds after uploading code",
+   "  -n                       : Do not connect to Espruino to upload code",
+   "  --board BRDNAME/BRD.json : Rather than checking on connect, use the given board name or file",
+   "  --ide [8080]             : Serve up the Espruino Web IDE on the given port. If not specified, 8080 is the default.",
+   "",
+   "  -p,--port /dev/ttyX      : Connect to a serial port",
+   "  -p,--port aa:bb:cc:dd:ee : Connect to a Bluetooth device by addresses",
+   "  -p,--port tcp://192.168.1.50 : Connect to a network device (port 23 default)",
    "  -d deviceName            : Connect to the first device with a name containing deviceName",
    "  -b baudRate              : Set the baud rate of the serial connection",
    "                               No effect when using USB, default: 9600",
    "  --no-ble                 : Disables Bluetooth Low Energy (using the 'noble' module)",
    "  --list                   : List all available devices and exit",
+   "",
    "  --listconfigs            : Show all available config options and exit",
    "  --config key=value       : Set internal Espruino config option",
-   "  -t,--time                : Set Espruino's time when uploading code",
+   "",
    "  -o out.js                : Write the actual JS code sent to Espruino to a file",
-   "  -ohex out.hex            : Write the JS code to a hex file as if sent by E.setBootCode",
-   "  -n                       : Do not connect to Espruino to upload code",
-   "  --board BRDNAME/BRD.json : Rather than checking on connect, use the given board name or file",
+   "  --ohex out.hex           : Write the JS code to a hex file as if sent by E.setBootCode",
+   "  --storage fn:data.bin    : Write a file named 'fn' to Storage, must be used with --ohex",
+   "  --storage .boot0:-       : Store program code in the given Storage file (not .bootcde)",
+   "",
    "  -f firmware.bin[:N]      : Update Espruino's firmware to the given file",
    "                               Espruino must be in bootloader mode.",
    "                               Optionally skip N first bytes of the bin file.",
-   "  -e command               : Evaluate the given expression on Espruino",
-   "                               If no file to upload is specified but you use -e,",
-   "                               Espruino will not be reset",
    "",
    "If no file, command, or firmware update is specified, this will act",
    "as a terminal for communicating directly with Espruino. Press Ctrl-C",
@@ -52,10 +61,14 @@ console.log = function() {
 }
 //Parse Arguments
 var args = {
- ports: [],
- config: {}
+ ports: [], // ports to try and connect to
+ config: {}, // Config defines to set when running Espruino tools
+ storageContents : {} // Storage files to save when using ohex
 };
 
+var isNextValidNumber = function(next) {
+ return next && isFinite(parseFloat(next));
+}
 var isNextValidPort = function(next) {
  return next && next[0]!=='-' && next.indexOf(".js") == -1;
 }
@@ -123,9 +136,13 @@ for (var i=2;i<process.argv.length;i++) {
    } else if (arg=="-o") {
      i++; args.outputJS = next;
      if (!isNextValidJS(next)) throw new Error("Expecting a JS filename argument to -o");
-   } else if (arg=="-ohex") {
+   } else if (arg=="--ohex" || arg=="-ohex"/* backwards compat.*/) {
      i++; args.outputHEX = next;
-     if (!isNextValidHEX(next)) throw new Error("Expecting a .hex file argument to -ohex");
+     if (!isNextValidHEX(next)) throw new Error("Expecting a .hex file argument to --ohex");
+   } else if (arg=="--storage") {
+     i++; var d = next.split(":");
+     if (!next || next.indexOf(":")<0) throw new Error("Expecting a fn:file.bin argument to --storage");
+     args.storageContents[d[0]] = d[1];
    } else if (arg=="-f") {
      i++; var arg = next;
      if (!isNextValid(next)) throw new Error("Expecting a filename argument to -f");
@@ -136,6 +153,15 @@ for (var i=2;i<process.argv.length;i++) {
    } else if (arg=="--board") {
      i++; args.board = next;
      if (!isNextValid(next)) throw new Error("Expecting an argument to --board");
+   } else if (arg=="--ide") {
+     args.ideServer = 8080;
+     if (isFinite(parseInt(next))) {
+       args.ideServer = parseInt(next);
+       i++;
+     }
+   } else if (arg=="--sleep") {
+     i++; args.sleepAfterUpload = parseFloat(next);
+     if (!isNextValidNumber(next)) throw new Error("Expecting a number argument to --sleep");
    } else throw new Error("Unknown Argument '"+arg+"', try --help");
  } else {
    if ("file" in args)
@@ -177,8 +203,20 @@ function setupConfig(Espruino, callback) {
    for (var key in args.espruino) Espruino.Config[key] = args.espruino[key];
  }
  if (args.outputHEX) {
-   log("-ohex used - enabling MODULE_AS_FUNCTION");
+   log("--ohex used - enabling MODULE_AS_FUNCTION");
    Espruino.Config.MODULE_AS_FUNCTION = true;
+ }
+ if (Object.keys(args.storageContents).length) {
+   if (!args.outputHEX)
+     throw new Error("-storage used without --ohex");
+  for (var storageName in args.storageContents) {
+    if (storageName=="-")
+      args.storageContents[storageName] = { code : true };
+    else {
+      var fileName = args.storageContents[storageName];
+      args.storageContents[storageName] = { file: fs.readFileSync(fileName, {encoding:"utf8"}).toString() };
+    }
+  }
  }
  if (args.config) {
    for (var key in args.config) {
@@ -224,6 +262,10 @@ function setupConfig(Espruino, callback) {
    process.exit(1);
    //Espruino.Core.Config.getSection(sectionName);
  }
+ if (args.file) {
+   var env = Espruino.Core.Env.getData();
+   env.FILE = args.file;
+ }
  if (args.board) {
    log("Explicit board JSON supplied: "+JSON.stringify(args.board));
    Espruino.Config.ENV_ON_CONNECT = false;
@@ -249,7 +291,7 @@ function setupConfig(Espruino, callback) {
 /* Write a file into a Uint8Array in the form that Espruino expects. Return the
 address of the next file.
 NOTE: On platforms with only a 64 bit write (STM32L4) this won't work */
-function setBufferFile(buffer, addr, filename, data) {
+function setStorageBufferFile(buffer, addr, filename, data) {
   if (!typeof data=="string") throw "Expecting string";
   if (addr&3) throw "Unaligned";
   var fileSize = data.length;
@@ -262,18 +304,20 @@ function setBufferFile(buffer, addr, filename, data) {
   // 'replacement' - none, since this is the only file
   buffer.set([0xFF,0xFF,0xFF,0xFF], addr+4);
   // 'filename', 8 bytes
+  if (filename.length>8) throw "Filename "+JSON.stringify(filename)+" too big";
   buffer.set([0,0,0,0,0,0,0,0], addr+8);
   for (var i=0;i<filename.length;i++)
     buffer[addr+8+i] = filename.charCodeAt(i);
   // Write the data in
   for (var i=0;i<fileSize;i++)
-    buffer[16+i] = data.charCodeAt(i);
+    buffer[addr+16+i] = data.charCodeAt(i);
   // return next addr
   return nextAddr;
 }
 
-// convert the given code to intel hex at the given location
-function toIntelHex(code) {
+/* Convert the given files to the format used by the Storage module,
+and return the Intel Hex file for it all. */
+function toIntelHex(files) {
   var saveAddress, saveSize;
   try {
     saveAddress = Espruino.Core.Env.getData().chip.saved_code.address;
@@ -284,7 +328,13 @@ function toIntelHex(code) {
   }
   var buffer = new Uint8Array(saveSize);
   buffer.fill(0xFF); // fill with 255 for emptiness
-  setBufferFile(buffer, 0, ".bootcde", code);
+  var offset = 0;
+  for (var filename in files) {
+    console.log(`Storage: set ${JSON.stringify(filename)} at ${offset} (${files[filename].length} bytes)`);
+    offset = setStorageBufferFile(buffer, offset, filename, files[filename]);
+  }
+  if (offset>saveSize)
+    throw new Error(`Too much code to save (${offset} vs ${saveSize} bytes)`);
   // Now work out intel hex
   function h(d) { var n = "0123456789ABCDEF"; return n[(d>>4)&15]+n[d&15]; }
   function ihexline(bytes) {
@@ -382,10 +432,31 @@ function sendCode(callback) {
       }
       if (args.outputHEX) {
         log("Writing hex output to "+args.outputHEX);
-        require("fs").writeFileSync(args.outputHEX, toIntelHex(code));
+        var storage = {}
+        var hadCode = false;
+        for (var storageName in args.storageContents) {
+          var storageContent = args.storageContents[storageName];
+          if (storageContent.code) {
+            storage[storageName] = code;
+            hadCode = true;
+          } else {
+            storage[storageName] = storageContent.file;
+          }
+        }
+        // add code in default place
+        if (!hadCode) storage[".bootcde"]=code;
+        require("fs").writeFileSync(args.outputHEX, toIntelHex(storage));
       }
       if (!args.nosend)
-        Espruino.Core.CodeWriter.writeToEspruino(code, callback);
+        Espruino.Core.CodeWriter.writeToEspruino(code, function() {
+          if (args.sleepAfterUpload) {
+            log("Upload Complete. Sleeping for "+args.sleepAfterUpload+"s");
+            setTimeout(callback, args.sleepAfterUpload*1000);
+          } else {
+            log("Upload Complete");
+            callback();
+          }
+        });
       else
         callback();
     });
@@ -396,13 +467,13 @@ function sendCode(callback) {
 
 /* Connect and send file/expression/etc */
 function connect(devicePath, exitCallback) {
+  if (args.ideServer) log("WARNING: --ide specified, but no terminal. Don't specify a file/expression to upload.");
   if (!args.quiet) if (! args.nosend) log("Connecting to '"+devicePath+"'");
   var currentLine = "";
   var exitTimeout;
+  // Handle received data
   Espruino.Core.Serial.startListening(function(data) {
-   // convert ArrayBuffer to string
    data = String.fromCharCode.apply(null, new Uint8Array(data));
-   // Now handle...
    currentLine += data;
    while (currentLine.indexOf("\n")>=0) {
      var i = currentLine.indexOf("\n");
@@ -441,6 +512,7 @@ function connect(devicePath, exitCallback) {
       // ----------------------
      }, function() {
        log("Disconnected.");
+       exitCallback();
      });
   } else {
     sendCode(function() {
@@ -463,11 +535,65 @@ function sendOnFileChanged() {
       sendCode(function() {
         console.log("File sent!");
         busy = false;
+        // start watching again
+        sendOnFileChanged();
       });
-      // start watching again
-      sendOnFileChanged();
     }, 500);
   });
+}
+
+/* Start a webserver for the Web IDE */
+function startWebIDEServer(writeCallback) {
+  var httpPort = args.ideServer;
+  var server = require("http").createServer(function(req, res) {
+    res.end(`<html>
+<body style="margin:0px">
+<iframe id="ideframe" src="https://www.espruino.com/ide/" style="width:100%;height:100%;border:0px;"></iframe>
+<script src="https://www.espruino.com/ide/embed.js"></script>
+<script>
+  var ws = new WebSocket("ws://" + location.host + "/ws", "serial");
+  var Espruino = EspruinoIDE(document.getElementById('ideframe'));
+  Espruino.onports = function() {
+    return [{path:'local', description:'Connected Device', type : "net"}];
+  };
+  Espruino.onready = function(data) { Espruino.connect("local");};
+  Espruino.onwrite = function(data) { ws.send(data); }
+  ws.onmessage = function (event) { Espruino.received(event.data); };
+  ws.onclose = function (event) { Espruino.disconnect(); };
+</script>
+</body>
+</html>
+`);
+  });
+  server.listen(httpPort);
+  log("Web IDE is now available on http://localhost:"+httpPort);
+  /* Start the WebSocket relay - allows standard Websocket MQTT communications */
+  var WebSocketServer = require('websocket').server;
+  var wsServer = new WebSocketServer({
+    httpServer: server,
+    autoAcceptConnections: false
+  });
+  var ideConnections = [];
+  wsServer.on('request', function(request) {
+    // request.reject() based on request.origin?
+    var connection = request.accept('serial', request.origin);
+    ideConnections.push(connection);
+    log('Web IDE Connection accepted.');
+    connection.on('message', function(message) {
+      if (message.type === 'utf8') writeCallback(message.utf8Data);
+    });
+    connection.on('close', function(reasonCode, description) {
+      log('Web IDE Connection closed.');
+      var conIdx = ideConnections.indexOf(connection);
+      if (conIdx>=0) ideConnections.splice(conIdx,1);
+    });
+  });
+
+  return {
+    write : function(data) {
+      ideConnections.forEach(function(connection) { connection.sendUTF(data) });
+    }
+  };
 }
 
 /* Connect and enter terminal mode */
@@ -475,10 +601,14 @@ function terminal(devicePath, exitCallback) {
   if (!args.quiet) log("Connecting to '"+devicePath+"'");
   var hadCtrlC = false;
   var hadCR = false;
+  var ideServer = undefined;
   process.stdin.setRawMode(true);
   Espruino.Core.Serial.startListening(function(data) {
     data = new Uint8Array(data);
-    process.stdout.write(String.fromCharCode.apply(null, data));
+    var dataStr = String.fromCharCode.apply(null, data);
+    if (ideServer) ideServer.write(dataStr);
+
+    process.stdout.write(dataStr);
     /* If Espruino responds after a Ctrl-C with anything other
      than a blank prompt, make sure the next Ctrl-C will exit */
     for (var i=0;i<data.length;i++) {
@@ -527,6 +657,11 @@ function terminal(devicePath, exitCallback) {
       exitCallback();
     });
 
+    if (args.ideServer)
+      ideServer = startWebIDEServer(function(data) {
+        Espruino.Core.Serial.write(data);
+      });
+
     // figure out what code we need to send (if any)
     sendCode(function() {
       if (args.watchFile) sendOnFileChanged();
@@ -564,13 +699,18 @@ function getPortPath(port, callback) {
   } else throw new Error("Unknown port type! "+JSON.stringify(port));
 }
 
+function tasksComplete() {
+  console.log("Done");
+  process.exit(0);
+}
+
 function startConnect() {
   if ((!args.file && !args.updateFirmware && !args.expr) || (args.file && args.watchFile)) {
     if (args.ports.length != 1)
       throw new Error("Can only have one port when using terminal mode");
 
     getPortPath(args.ports[0], function(path) {
-      terminal(path, function() { process.exit(0); });
+      terminal(path, tasksComplete);
     });
   } else {
     //closure for stepping through each port
@@ -580,7 +720,7 @@ function startConnect() {
       this.idx = 0;
       this.connect = connect;
       this.iterate = function() {
-        if (idx>=ports.length) process.exit(0);
+        if (idx>=ports.length) tasksComplete();
         else getPortPath(ports[idx++], function(path) {
           connect(path,iterate);
         });
@@ -596,10 +736,7 @@ function main() {
     if (args.ports.length == 0 && (args.outputJS || args.outputHEX)) {
       console.log("No port supplied, but output file listed - not connecting");
       args.nosend = true;
-      sendCode(function() {
-        log("File written. Exiting.");
-        process.exit(1);
-      });
+      sendCode(tasksComplete);
     } else if (args.ports.length == 0 || args.showDevices) {
       console.log("Searching for serial ports...");
       Espruino.Core.Serial.getPorts(function(ports, shouldCallAgain) {
@@ -627,11 +764,13 @@ function main() {
           args.ports = [{type:"path",name:ports[0].path}];
           startConnect();
         } else
-          throw new Error("No Ports Found");
+          console.error("Error: No Ports Found");
+          process.exit(1);
       });
     } else startConnect();
   });
 }
+
 
 // Start up
 require('../index.js').init(main);

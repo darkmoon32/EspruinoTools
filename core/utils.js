@@ -449,6 +449,9 @@
       fileLoader.setAttribute("id", loaderId);
       fileLoader.setAttribute("type", "file");
       fileLoader.setAttribute("style", "z-index:-2000;position:absolute;top:0px;left:0px;");
+      fileLoader.addEventListener('click', function(e) {
+        e.target.value = ''; // handle repeated upload of the same file
+      });
       fileLoader.addEventListener('change', function(e) {
         if (!fileLoader.callback) return;
         var files = e.target.files;
@@ -470,7 +473,7 @@
   /** Bluetooth device names that we KNOW run Espruino */
   function recognisedBluetoothDevices() {
     return [
-       "Puck.js", "Pixl.js", "MDBT42Q", "Espruino", "Badge", "Thingy", "RuuviTag", "iTracker"
+       "Puck.js", "Pixl.js", "MDBT42Q", "Espruino", "Badge", "Thingy", "RuuviTag", "iTracker", "Smartibot"
     ];
   }
 

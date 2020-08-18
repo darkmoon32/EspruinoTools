@@ -20,6 +20,7 @@ var Espruino;
    *
    * Common processors are:
    *
+   *   jsCodeChanged        - called when the code in the editor changes with {code}
    *   sending              - sending code to Espruino (no data)
    *   transformForEspruino - transform code ready to be sent to Espruino
    *   transformModuleForEspruino({code,name})
@@ -35,6 +36,7 @@ var Espruino;
    *   terminalNewLine      - When we get a new line on the terminal, this gets called with the last line's contents
    *   debugMode            - called with true or false when debug mode is entered or left
    *   editorHover          - called with { node : htmlNode, showTooltip : function(htmlNode) } when something is hovered over
+   *   notification         - called with { mdg, type:"success","error"/"warning"/"info" }
    **/
   var processors = {};
 
@@ -44,8 +46,13 @@ var Espruino;
       // Initialise all modules
       function initModule(modName, mod) {
         console.log("Initialising "+modName);
-        if (mod.init !== undefined)
-          mod.init();
+        if (mod.init !== undefined) {
+          try {
+            mod.init();
+          } catch (e) {
+            console.warn("Module initialisation failed for "+modName, e);
+          }
+        }
       }
 
       var module;
@@ -61,13 +68,9 @@ var Espruino;
     });
   }
 
-  // workaround for broken chrome on Mac
-  if (navigator.userAgent.indexOf("Mac OS X")>=0 &&
-      navigator.userAgent.indexOf("Chrome/33.0.1750")>=0) {
-    $(document).ready(function() { window.setTimeout(init,100); });
-  } else {
-    $(document).ready(init);
-  }
+  // Automatically start up when all is loaded
+  if (typeof document!=="undefined")
+    document.addEventListener("DOMContentLoaded", init);
 
   /** Add a processor function of type function(data,callback) */
   function addProcessor(eventType, processor) {

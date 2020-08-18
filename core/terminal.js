@@ -26,6 +26,8 @@
   var termText = [ "" ];
   // Map of terminal line number to text to display before it
   var termExtraText = {};
+  // List of (jquerified) DOM elements for each line
+  var elements = [];
 
   var termCursorX = 0;
   var termCursorY = 0;
@@ -59,32 +61,36 @@
     var terminal = document.getElementById("terminal");
     var terminalfocus = document.getElementById("terminalfocus");
 
-    var html = "";
-    html+='<div style="max-width:400px;margin:auto;">\n';
-    html+='  <p><a href="http://www.espruino.com/Web+IDE" target="_blank"><img src="img/ide_logo.png" width="299" height="96" alt="Espruino IDE"/></a></p>\n';
-    html+='  <p id="versioninfo" style="text-align:right"></p>\n';
-    html+='  <p style="text-align:center;font-weight:bold">A Code Editor and Terminal for <a href="http://www.espruino.com" target="_blank">Espruino JavaScript Microcontrollers</a></p>\n';
-    html+='  <p>Try the <a class="tour_link" href="#">guided tour</a> and <a href="http://www.espruino.com/Quick+Start" target="_blank">getting started</a> guide for more information, tutorials and example projects.</p>\n';
-    html+='  <div id="terminalnews"></div>\n';
-    html+='  <p>Espruino is <a href="https://github.com/espruino" target="_blank">Open Source</a>.\n';
-    html+='Please support us by <a href="http://www.espruino.com/Donate" target="_blank">donating</a> or\n';
-    html+='  <a href="http://www.espruino.com/Order" target="_blank">buying an official board</a>.</p>\n';
-    html+='  <p style="text-align:right">\n'
-    html+='    <a href="http://twitter.com/Espruino" target="_blank"><img src="img/icon_twitter.png" width="16" height="16" alt="Follow on Twitter"/></a>\n';
-    html+='    <a href="http://youtube.com/subscription_center?add_user=espruino" target="_blank"><img src="img/icon_youtube.png" width="44" height="16" alt="Subscribe on YouTube"/></a>\n';
-    html+='    <a href="https://www.patreon.com/espruino" target="_blank"><img src="img/icon_patreon.png" width="45" height="16" alt="Support on Patreon"/></a>\n';
-    html+='  </p>\n';
-    html+='</div>\n';
+    var html;
+    if (Espruino.Core.Terminal.OVERRIDE_CONTENTS) {
+      html = Espruino.Core.Terminal.OVERRIDE_CONTENTS;
+    } else {
+      html = `
+    <div style="max-width:400px;margin:auto;">
+      <p><a href="http://www.espruino.com/Web+IDE" target="_blank"><img src="img/ide_logo.png" width="299" height="96" alt="Espruino IDE"/></a></p>
+      <p id="versioninfo" style="text-align:right"></p>
+      <p style="text-align:center;font-weight:bold">A Code Editor and Terminal for <a href="http://www.espruino.com" target="_blank">Espruino JavaScript Microcontrollers</a></p>
+      <p>Try the <a class="tour_link" href="#">guided tour</a> and <a href="http://www.espruino.com/Quick+Start" target="_blank">getting started</a> guide for more information, tutorials and example projects.</p>
+      <div id="terminalnews"></div>
+      <p>Espruino is <a href="https://github.com/espruino" target="_blank">Open Source</a>.
+    Please support us by <a href="http://www.espruino.com/Donate" target="_blank">donating</a> or
+      <a href="http://www.espruino.com/Order" target="_blank">buying an official board</a>.</p>
+      <p style="text-align:right">
+        <a href="http://twitter.com/Espruino" target="_blank"><img src="img/icon_twitter.png" width="16" height="16" alt="Follow on Twitter"/></a>
+        <a href="http://youtube.com/subscription_center?add_user=espruino" target="_blank"><img src="img/icon_youtube.png" width="44" height="16" alt="Subscribe on YouTube"/></a>
+        <a href="https://www.patreon.com/espruino" target="_blank"><img src="img/icon_patreon.png" width="45" height="16" alt="Support on Patreon"/></a>
+      </p>
+    </div>`;
+      Espruino.Core.Utils.getVersionInfo(function(v) {
+        $("#versioninfo").html(v);
 
-    terminal.innerHTML = html;
-    Espruino.Core.Utils.getVersionInfo(function(v) {
-      $("#versioninfo").html(v);
-
-      var r = 0|(Math.random()*1000000);
-      $.get("https://www.espruino.com/ide/news.html?v="+encodeURIComponent(v.replace(/[ ,]/g,"")+"&r="+r), function (data){
-        $("#terminalnews").html(data);
+        var r = 0|(Math.random()*1000000);
+        $.get("https://www.espruino.com/ide/news.html?v="+encodeURIComponent(v.replace(/[ ,]/g,"")+"&r="+r), function (data){
+          $("#terminalnews").html(data);
+        });
       });
-    });
+    }
+    terminal.innerHTML = html;
 
     $(".tour_link").click(function(e) {
       e.preventDefault();
@@ -247,8 +253,8 @@
             term.classList.add("editor__canvas__fullscreen");
             document.body.append(term);
           }
-          // if we have a webcam it seems we need to start it playing again 
-          // after moving it 
+          // if we have a webcam it seems we need to start it playing again
+          // after moving it
           var vid = document.querySelector("video");
           if (vid) vid.play();
         }
@@ -284,6 +290,8 @@
       }, 100);
     });
 
+    // Ensure that data from Espruino goes to this terminal
+    Espruino.Core.Serial.startListening(Espruino.Core.Terminal.outputDataHandler);
 
     Espruino.addProcessor("connected", function(data, callback) {
       grabSerialPort();
@@ -292,7 +300,7 @@
     });
     Espruino.addProcessor("disconnected", function(data, callback) {
       // carriage return, clear to right - remove prompt, add newline
--      outputDataHandler("\n");
+-     outputDataHandler("\n");
       terminal.classList.remove("terminal--connected");
       callback(data);
     });
@@ -335,7 +343,7 @@
   var updateTerminal = function() {
     var terminal = $("#terminal");
     // gather a list of elements for each line
-    var elements = [];
+    elements = [];
     terminal.children().each(function() {
       var n = $(this).attr("lineNumber");
       if (n!==undefined)
@@ -376,7 +384,7 @@
     // now write this to the screen
     var t = [];
     for (var y in termText) {
-      var line = termText[y];      
+      var line = termText[y];
       if (y == termCursorY) {
         var ch = Espruino.Core.Utils.getSubString(line,termCursorX,1);
         line = Espruino.Core.Utils.escapeHTML(
@@ -391,9 +399,9 @@
       // detect inline images and link them in
       var m = line.match(/data:image\/\w+;base64,[\w\+\/=]+/);
       if (m) {
-        line = line.substr(0,m.index)+'<img class="terminal-inline-image" src="'+m[0]+'"/>'+line.substr(m.index+m[0].length);
+        line = line.substr(0,m.index)+'<a href="'+m[0]+'" download><img class="terminal-inline-image" src="'+m[0]+'"/></a>'+line.substr(m.index+m[0].length);
       }
-      
+
       // extra text is for stuff like tutorials
       if (termExtraText[y])
         line = termExtraText[y] + line;
@@ -588,6 +596,11 @@
     updateTerminal();
   };
 
+  /// Does the terminal have focus?
+  function hasFocus() {
+    return document.querySelector("#terminal").classList.contains("focus");
+  };
+
   /// Give the terminal focus
   function focus() {
     $("#terminalfocus").focus();
@@ -623,12 +636,21 @@
     return termText[line];
   };
 
-  function addNotification(text, type) {
+  /** Add a notification to the terminal (as HTML). If options.buttonclick is set
+  then the first <button> inside the notification text
+  will have a click handler registered*/
+  function addNotification(text, options) {
+    options = options||{};
     var line = getInputLine(0);
     line = (line===undefined)?0:line.line;
     if (!termExtraText[line]) termExtraText[line]="";
     termExtraText[line] += '<div class="notification_text">'+text+'</div>';
     updateTerminal();
+    if (options.buttonclick) {
+      var btn = elements[line].find("button");
+      if (!btn.length) console.error("Espruino.Core.Terminal buttonclick set but no button");
+      btn.on('click', options.buttonclick);
+    }
   }
 
   Espruino.Core.Terminal = {
@@ -638,6 +660,7 @@
       getTerminalLine : getTerminalLine,
       getCurrentLine : getCurrentLine,
       isVisible : isVisible, // Is the terminal actually visible, or is it so small it can't be seen?
+      hasFocus : hasFocus, // Does the termninal have focus?
       focus : focus, // Give this focus
       clearTerminal : clearTerminal, // Clear the contents of the terminal
 

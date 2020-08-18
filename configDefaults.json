@@ -23,10 +23,6 @@
     "ENV_ON_CONNECT": true,
     "MINIFICATION_LEVEL": "",
     "MINIFICATION_Mangle": true,
-    "MINIFICATION_Unreachable": true,
-    "MINIFICATION_Unused": true,
-    "MINIFICATION_Literal": true,
-    "MINIFICATION_DeadCode": true,
     "MODULE_AS_FUNCTION": false,
     "MODULE_EXTENSIONS": ".min.js|.js",
     "MODULE_MINIFICATION_LEVEL": "ESPRIMA",
@@ -34,6 +30,7 @@
     "NPM_MODULES": false,
     "RESET_BEFORE_SEND": true,
     "SAVE_ON_SEND": 1,
+    "SAVE_STORAGE_FILE": "",
     "SERIAL_AUDIO": 0,
     "SERIAL_TCPIP": "",
     "SERIAL_THROTTLE_SEND": false,
@@ -43,4 +40,3 @@
     "WEB_BLUETOOTH": true
   }
 }
-

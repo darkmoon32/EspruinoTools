@@ -1,63 +1,104 @@
 (function() {
 
-  // Fix up prefixing
-  if (typeof navigator == "undefined") {
-    console.log("Not running in a browser - Web Serial not enabled");
-    return;
-  }
+  // TODO: Pass USB vendor and product ID filter when supported by Chrome.
+  //       - maybe not? We might want to connect to a non-official Espruino board
+  // TODO: Use device name when/if supported
 
-  function checkCompatibility() {
+  function getStatus(ignoreSettings) {
+    if (typeof navigator == "undefined") {
+      return {warning:"Not running in a browser"};
+    }
     if (!navigator.serial) {
-      console.log("No navigator.serial - Web Serial not enabled");
-      return false;
+      if (Espruino.Core.Utils.isChrome())
+        return {error:`Chrome currently requires <code>chrome://flags/#enable-experimental-web-platform-features</code> to be enabled.`};
+      else if (Espruino.Core.Utils.isFirefox())
+        return {error:`Firefox doesn't support Web Serial - try using Chrome`};
+      else
+        return {error:"No navigator.serial. Do you have a supported browser?"};
     }
     if (window && window.location && window.location.protocol=="http:" &&
         window.location.hostname!="localhost") {
-      console.log("Serving off HTTP (not HTTPS) - Web Serial not enabled");
-      return false;
+      return {error:"Serving off HTTP (not HTTPS)"};
     }
+    if (!ignoreSettings && !Espruino.Config.WEB_SERIAL)
+      return {warning:`"Web Serial" disabled in settings`};
     return true;
   }
 
-  var WEB_SERIAL_OK = true;
+  var OK = true;
   var testedCompatibility = false;
+  /// List of previously paired devices that we could reconnect to without the chooser
+  var pairedDevices = [];
 
-  var serialPort = undefined;
+  var serialPort;
+  var serialPortReader;
   var connectionDisconnectCallback;
 
   function init() {
     Espruino.Core.Config.add("WEB_SERIAL", {
       section : "Communications",
       name : "Connect over Serial (Web Serial)",
-      descriptionHTML : 'Allow connection to Espruino via serial',
+      descriptionHTML : 'Allow connection to Espruino from the Web Browser via Serial. The API must currently be enabled by pasting <code>chrome://flags#enable-experimental-web-platform-features</code> into the address bar and clicking <code>Enable</code>',
       type : "boolean",
       defaultValue : true,
     });
+    // If we're ok and have the getDevices extension, use it to remember previously paired devices
+    if (getStatus(true)===true && navigator.serial.getPorts) {
+      console.log("Serial> serial.getPorts exists - grab known devices");
+      navigator.serial.getPorts().then(devices=>{
+        pairedDevices = devices;
+      });
+    }
+  }
+
+  function getSerialDeviceInfo(device) {
+    var idx = pairedDevices.indexOf(device);
+    var deviceInfo = { path : "webserial:"+(idx>=0?idx:""), type : "usb", description : "Previously connected device"};
+    if (device.getInfo) {
+      var info = device.getInfo();
+      if (info.usbVendorId && info.usbProductId) {
+        deviceInfo.path = "webserial:"+(63356+info.usbVendorId).toString(16).substr(-4)+":"+(63356+info.usbProductId).toString(16).substr(-4);
+      }
+    }
+    return deviceInfo;
   }
 
   function getPorts(callback) {
     if (!testedCompatibility) {
       testedCompatibility = true;
-      if (!checkCompatibility())
-        WEB_SERIAL_OK = false;
+      if (getStatus(true)!==true)
+        OK = false;
     }
-    if (Espruino.Config.WEB_SERIAL && WEB_SERIAL_OK)
-      callback([{path:'Web Serial', description:'Serial', type : "serial"}], true/*instantPorts*/);
-    else
+    if (Espruino.Config.WEB_SERIAL && OK) {
+      var list = [{path:'Web Serial', description:'Serial', type : "serial", promptsUser:true}];
+      pairedDevices.forEach(function(dev) {
+        list.push(getSerialDeviceInfo(dev));
+      });
+      callback(list, true/*instantPorts*/);
+    } else
       callback(undefined, true/*instantPorts*/);
   }
 
-  function openSerial(_, openCallback, receiveCallback, disconnectCallback) {
-    // TODO: Pass USB vendor and product ID filter when supported by Chrome.
-    navigator.serial.requestPort({}).then(function(port) {
+  function openSerial(path, openCallback, receiveCallback, disconnectCallback) {
+    var promise;
+    // Check for pre-paired devices
+    serialPort = pairedDevices.find(dev=>getSerialDeviceInfo(dev).path == path);
+    if (serialPort) {
+      console.log("Serial> Pre-paired Web Serial device already found");
+      promise = Promise.resolve(serialPort);
+    } else {
+      console.log("Serial> Starting device chooser");
+      promise = navigator.serial.requestPort({});
+    }
+    promise.then(function(port) {
       Espruino.Core.Status.setStatus("Connecting to serial port");
       serialPort = port;
       return port.open({ baudrate: parseInt(Espruino.Config.BAUD_RATE) });
     }).then(function () {
       function readLoop() {
-        var reader = serialPort.readable.getReader();
-        reader.read().then(function ({ value, done }) {
-          reader.releaseLock();
+        serialPortReader = serialPort.readable.getReader();
+        serialPortReader.read().then(function ({ value, done }) {
+          serialPortReader.releaseLock();
           if (value) {
             receiveCallback(value.buffer);
           }
@@ -70,8 +111,10 @@
       }
       readLoop();
       Espruino.Core.Status.setStatus("Serial connected. Receiving data...");
-      // TODO: Provide a device name when supported by Chrome.
-      openCallback({});
+      if (!pairedDevices.includes(serialPort))
+        pairedDevices.push(serialPort);
+
+      openCallback({ portName : getSerialDeviceInfo(serialPort).path });
     }).catch(function(error) {
       console.log('Serial> ERROR: ' + error);
       disconnectCallback();
@@ -80,8 +123,11 @@
 
   function closeSerial() {
     if (serialPort) {
-      serialPort.close();
-      serialPort = undefined;
+      serialPortReader.cancel().then(function() {
+        serialPort.close();
+        serialPort = undefined;
+        serialPortReader = undefined;
+      });
     }
     if (connectionDisconnectCallback) {
       connectionDisconnectCallback();
@@ -105,6 +151,7 @@
   Espruino.Core.Serial.devices.push({
     "name" : "Web Serial",
     "init" : init,
+    "getStatus": getStatus,
     "getPorts": getPorts,
     "open": openSerial,
     "write": writeSerial,

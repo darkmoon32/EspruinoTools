@@ -29,10 +29,10 @@
     });
     Espruino.Core.Config.add("MODULE_AS_FUNCTION", {
       section : "Communications",
-      name : "Modules uploaded as functions (BETA)",
+      name : "Modules uploaded as functions",
       description : "Espruino 1v90 and later ONLY. Upload modules as Functions, allowing any functions inside them to be loaded directly from flash when 'Save on Send' is enabled.",
       type : "boolean",
-      defaultValue : false
+      defaultValue : true
     });
 
     Espruino.Core.Config.add("MODULE_PROXY_ENABLED", {
@@ -61,9 +61,6 @@
 
     // When code is sent to Espruino, search it for modules and add extra code required to load them
     Espruino.addProcessor("transformForEspruino", function(code, callback) {
-      if (Espruino.Config.ROLLUP) {
-        return loadModulesRollup(code, callback);
-      }
       loadModules(code, callback);
     });
 
@@ -184,13 +181,16 @@
     }
 
     var loadProcessedModule = function (module) {
-      // add the module to the beginning of our array
-      if (Espruino.Config.MODULE_AS_FUNCTION)
-        loadedModuleData.unshift("Modules.addCached(" + JSON.stringify(module.name) + ",function(){" + module.code + "});");
-      else
-        loadedModuleData.unshift("Modules.addCached(" + JSON.stringify(module.name) + "," + JSON.stringify(module.code) + ");");
-      // if we needed to load something, wait until we have all promises complete before resolving our promise!
-      Promise.all(newPromises).then(function(){ resolve(); });
+      // if we needed to load something, wait until it's loaded before resolving this
+      Promise.all(newPromises).then(function(){
+        // add the module to end of our array
+        if (Espruino.Config.MODULE_AS_FUNCTION)
+          loadedModuleData.push("Modules.addCached(" + JSON.stringify(module.name) + ",function(){" + module.code + "});");
+        else
+          loadedModuleData.push("Modules.addCached(" + JSON.stringify(module.name) + "," + JSON.stringify(module.code) + ");");
+        // We're done
+        resolve();
+      });
     }
     if (alreadyMinified)
       loadProcessedModule({code:data,name:modName});
@@ -237,24 +237,8 @@
         callback(loadedModuleData.join("\n") + "\n" + code);
       });
     }
-  }
+  };
 
-  function loadModulesRollup(code, callback) {
-    rollupTools.loadModulesRollup(code)
-      .then(generated => {
-        const minified = generated.code;
-        console.log('rollup: '+minified.length+' bytes');
-
-        // FIXME: needs warnings?
-        Espruino.Core.Notifications.info('Rollup no errors. Bundling ' + code.length + ' bytes to ' + minified.length + ' bytes');
-        callback(minified);
-      })
-      .catch(err => {
-        console.log('rollup:error', err);
-        Espruino.Core.Notifications.error("Rollup errors - Bundling failed: " + String(err).trim());
-        callback(code);
-      });
-  }
 
   Espruino.Core.Modules = {
     init : init

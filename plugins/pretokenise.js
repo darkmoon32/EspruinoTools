@@ -11,6 +11,11 @@
 **/
 "use strict";
 (function(){
+  if (typeof acorn == "undefined") {
+    console.log("pretokenise: needs acorn, disabling.");
+    return;
+  }
+
   function init() {
     Espruino.Core.Config.add("PRETOKENISE", {
       section : "Minification",
@@ -69,7 +74,7 @@
 /*LEX_R_DO :       */ "do",
 /*LEX_R_WHILE :    */ "while",
 /*LEX_R_FOR :      */ "for",
-/*LEX_R_BREAK :    */ "return",
+/*LEX_R_BREAK :    */ "break",
 /*LEX_R_CONTINUE   */ "continue",
 /*LEX_R_FUNCTION   */ "function",
 /*LEX_R_RETURN     */ "return",
@@ -98,11 +103,30 @@
 /*LEX_R_CLASS :    */ "class",
 /*LEX_R_EXTENDS :  */ "extends",
 /*LEX_R_SUPER :  */   "super",
-/*LEX_R_STATIC :   */ "static"];
+/*LEX_R_STATIC :   */ "static",
+/*LEX_R_OF    :   */  "of"
+];
 
 
   function pretokenise(code, callback) {
-    var lex = Espruino.Core.Utils.getLexer(code);
+    var lex = (function() {
+      var t = acorn.tokenizer(code);
+      return { next : function() {
+        var tk = t.getToken();
+        if (tk.type.label=="eof") return undefined;
+        var tp = "?";
+        if (tk.type.label=="template" || tk.type.label=="string") tp="STRING";
+        if (tk.type.label=="num") tp="NUMBER";
+        if (tk.type.keyword || tk.type.label=="name") tp="ID";
+        if (tp=="?" && tk.start+1==tk.end) tp="CHAR";
+        return {
+          startIdx : tk.start,
+          endIdx : tk.end,
+          str : code.substring(tk.start, tk.end),
+          type : tp
+        };
+      }};
+    })();
     var brackets = 0;
     var resultCode = "";
     var lastIdx = 0;
@@ -113,20 +137,27 @@
       var tokenString = code.substring(tok.startIdx, tok.endIdx);
       var tokenId = LEX_OPERATOR_START + TOKENS.indexOf(tokenString);
       if (tokenId<LEX_OPERATOR_START) tokenId=undefined;
-      console.log("prev "+JSON.stringify(previousString)+"   next "+tokenString);
+      // Workaround for https://github.com/espruino/Espruino/issues/1868
+      if (tokenString=="catch") tokenId=undefined;
+      //console.log("prev "+JSON.stringify(previousString)+"   next "+tokenString);
 
       if (tok.str=="(" || tok.str=="{" || tok.str=="[") brackets++;
-      if (tok.str==")" || tok.str=="}" || tok.str=="]") brackets--;
-
       // TODO: check for eg. two IDs/similar which can't be merged without a space
       // preserve newlines at root scope to avoid us filling up the command buffer all at once
       if (brackets==0 && previousString.indexOf("\n")>=0)
         resultCode += "\n";
+      if (tok.str==")" || tok.str=="}" || tok.str=="]") brackets--;
       // if we have a token for something, use that - else use the string
-      if (tokenId)
+      if (tokenId) {
+        //console.log(JSON.stringify(tok.str)+" => "+tokenId);
         resultCode += String.fromCharCode(tokenId);
-      else
+        tok.type = "TOKENISED";
+      } else {
+        if ((tok.type=="ID" || tok.type=="NUMBER") &&
+            (lastTok.type=="ID" || lastTok.type=="NUMBER"))
+          resultCode += " ";
         resultCode += tokenString;
+      }
       // next
       lastIdx = tok.endIdx;
       lastTok = tok;

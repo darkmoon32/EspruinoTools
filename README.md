@@ -52,8 +52,9 @@ USAGE: espruino ...options... [file_to_upload.js]
   --storage fn:data.bin    : Write a file named 'fn' to Storage, must be used with --ohex
   --storage .boot0:-       : Store program code in the given Storage file (not .bootcde)
 
-  -f firmware.bin[:N]      : Update Espruino's firmware to the given file
-                               Espruino must be in bootloader mode.
+  -f firmware.bin[:N]      : Update Espruino's firmware to the given file.
+                               Must be a USB Espruino in bootloader mode
+                               (bluetooth is not currently supported).
                                Optionally skip N first bytes of the bin file.
 
 If no file, command, or firmware update is specified, this will act
@@ -172,7 +173,10 @@ var esp = require("espruino");
 esp.init(callback);
 
 /** Send a file to an Espruino on the given port, call the callback when done (calls 'init' automatically) */
-esp.sendFile (port, filename, callback);
+esp.sendFile(port, filename, callback);
+
+/** Send code to an Espruino on the given port, call the callback when done (calls 'init' automatically) */
+esp.sendCode(port, "LED.set()\n", callback);
 
 /** Execute an expression on Espruino, call the callback with the result (calls 'init' automatically) */
 esp.expr(port, expr, callback(result));
@@ -225,10 +229,6 @@ The following table provides a guide for setting configuration fields, but consu
 | --list               | showDevices (false)    |                                                    |
 | -m,-minify           | minify (false)         | MINIFICATION_LEVEL ("")                            |
 |                      |                        | MINIFICATION_Mangle (true) *4*                     |
-|                      |                        | MINIFICATION_Unreachable (true) *4*                |
-|                      |                        | MINIFICATION_Unused (true) *4*                     |
-|                      |                        | MINIFICATION_Literal (true) *4*                    |
-|                      |                        | MINIFICATION_DeadCode (true) *4*                   |
 | -no-ble              | no-ble (false)         | BLUETOOTH_LOW_ENERGY (true)                        |
 | -o out.js            | outputJS ("")          |                                                    |
 | -p,--port /dev/ttyX  | ports ([""])           |                                                    |

@@ -20,8 +20,20 @@
     return (typeof navigator!="undefined") && navigator.userAgent.indexOf("Windows")>=0;
   }
 
+  function isLinux() {
+    return (typeof navigator!="undefined") && navigator.userAgent.indexOf("Linux")>=0;
+  }
+
   function isAppleDevice() {
     return (typeof navigator!="undefined") && (typeof window!="undefined") && /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+  }
+
+  function isChrome(){
+    return navigator.userAgent.indexOf("Chrome")>=0;
+  }
+
+  function isFirefox(){
+    return navigator.userAgent.indexOf("Firefox")>=0;
   }
 
   function getChromeVersion(){
@@ -132,10 +144,22 @@
         } while (isIn(chAlphaNum,ch));
       } else if (isIn(chNum,ch)) { // NUMBER
         type = "NUMBER";
-        do {
+        var chRange = chNum;
+        if (ch=="0") { // Handle
           s+=ch;
           nextCh();
-        } while (isIn(chNum,ch) || ch==".")
+          if ("xXoObB".indexOf(ch)>=0) {
+            if (ch=="b" || ch=="B") chRange="01";
+            if (ch=="o" || ch=="O") chRange="01234567";
+            if (ch=="x" || ch=="X") chRange="0123456789ABCDEFabcdef";
+            s+=ch;
+            nextCh();
+          }
+        }
+        while (isIn(chRange,ch) || ch==".") {
+          s+=ch;
+          nextCh();
+        }
       } else if (isIn(chQuotes,ch)) { // STRING
         type = "STRING";
         var q = ch;
@@ -146,6 +170,7 @@
           s+=ch;
           if (ch=="\\") {
             nextCh();
+            s+=ch;
             // FIXME: handle hex/etc correctly here
           }
           value += ch;
@@ -238,10 +263,24 @@
     Espruino.Core.Serial.write('\n');
   };
 
-  /** Return the value of executing an expression on the board */
-  function executeExpression(expressionToExecute, callback) {
+  /** Return the value of executing an expression on the board. If
+  If exprPrintsResult=false/undefined the actual value returned by the expression is returned.
+  If exprPrintsResult=true, whatever expression prints to the console is returned */
+  function executeExpression(expressionToExecute, callback, exprPrintsResult) {
     var receivedData = "";
     var hadDataSinceTimeout = false;
+    var allDataSent = false;
+
+    var progress = 100;
+    function incrementProgress() {
+      if (progress==100) {
+        Espruino.Core.Status.setStatus("Receiving...",100);
+        progress=0;
+      } else {
+        progress++;
+        Espruino.Core.Status.incrementProgress(1);
+      }
+    }
 
     function getProcessInfo(expressionToExecute, callback) {
       var prevReader = Espruino.Core.Serial.startListening(function (readData) {
@@ -249,6 +288,7 @@
         for(var i = 0; i < bufView.length; i++) {
           receivedData += String.fromCharCode(bufView[i]);
         }
+        if(allDataSent) incrementProgress();
         // check if we got what we wanted
         var startProcess = receivedData.indexOf("< <<");
         var endProcess = receivedData.indexOf(">> >", startProcess);
@@ -271,6 +311,7 @@
 
       // when we're done...
       var nextStep = function(result) {
+        Espruino.Core.Status.setStatus("");
         // start the previous reader listing again
         Espruino.Core.Serial.startListening(prevReader);
         // forward the original text to the previous reader
@@ -281,27 +322,36 @@
 
       var timeout = undefined;
       // Don't Ctrl-C, as we've already got ourselves a prompt with Espruino.Core.Utils.getEspruinoPrompt
-      Espruino.Core.Serial.write('\x10print("<","<<",JSON.stringify('+expressionToExecute+'),">>",">")\n',
+      var cmd;
+      if (exprPrintsResult)
+        cmd  = '\x10print("<","<<");'+expressionToExecute+';print(">>",">")\n';
+      else
+        cmd  = '\x10print("<","<<",JSON.stringify('+expressionToExecute+'),">>",">")\n';
+
+      Espruino.Core.Serial.write(cmd,
                                  undefined, function() {
+        allDataSent = true;
         // now it's sent, wait for data
-        var maxTimeout = 10; // seconds - how long we wait if we're getting data
+        var maxTimeout = 30; // seconds - how long we wait if we're getting data
         var minTimeout = 2; // seconds - how long we wait if we're not getting data
         var pollInterval = 500; // milliseconds
         var timeoutSeconds = 0;
-        if (timeout != "cancelled")
+        if (timeout != "cancelled") {
           timeout = setInterval(function onTimeout(){
-          timeoutSeconds += pollInterval/1000;
-          // if we're still getting data, keep waiting for up to 10 secs
-          if (hadDataSinceTimeout && timeoutSeconds<maxTimeout) {
-            hadDataSinceTimeout = false;
-          } else if (timeoutSeconds > minTimeout) {
-            // No data yet...
-            // OR we keep getting data for > maxTimeout seconds
-            clearInterval(timeout);
-            console.warn("No result found for "+JSON.stringify(expressionToExecute)+" - just got "+JSON.stringify(receivedData));
-            nextStep(undefined);
-          }
-        }, pollInterval);
+            incrementProgress();
+            timeoutSeconds += pollInterval/1000;
+            // if we're still getting data, keep waiting for up to 10 secs
+            if (hadDataSinceTimeout && timeoutSeconds<maxTimeout) {
+              hadDataSinceTimeout = false;
+            } else if (timeoutSeconds > minTimeout) {
+              // No data yet...
+              // OR we keep getting data for > maxTimeout seconds
+              clearInterval(timeout);
+              console.warn("No result found for "+JSON.stringify(expressionToExecute)+" - just got "+JSON.stringify(receivedData));
+              nextStep(undefined);
+            }
+          }, pollInterval);
+        }
       });
     }
 
@@ -319,27 +369,6 @@
     return parseFloat(version.trim().replace("v","."));
   };
 
-  /** Make an HTML table out of a simple key/value object */
-  function htmlTable(obj) {
-    var html = '<table>';
-    for (var key in obj) {
-      html += '<tr><th>'+Espruino.Core.Utils.escapeHTML(key)+'</th><td>'+Espruino.Core.Utils.escapeHTML(obj[key])+'</td></tr>';
-    }
-    return html + '</table>';
-  }
-
-  function markdownToHTML(markdown) {
-    var html = markdown;
-    //console.log(JSON.stringify(html));
-    html = html.replace(/([^\n]*)\n=====*\n/g, "<h1>$1</h1>"); // heading 1
-    html = html.replace(/([^\n]*)\n-----*\n/g, "<h2>$1</h2>"); // heading 2
-    html = html.replace(/\n\s*\n/g, "\n<br/><br/>\n"); // newlines
-    html = html.replace(/\*\*(.*)\*\*/g, "<strong>$1</strong>"); // bold
-    html = html.replace(/```(.*)```/g, "<span class=\"code\">$1</span>"); // code
-    //console.log(JSON.stringify(html));
-    return html;
-  };
-
   /// Gets a URL, and returns callback(data) or callback(undefined) on error
   function getURL(url, callback) {
     Espruino.callProcessor("getURL", { url : url, data : undefined }, function(result) {
@@ -349,12 +378,22 @@
         var resultUrl = result.url ? result.url : url;
         if (typeof process === 'undefined') {
           // Web browser
-          $.get( resultUrl, function(d) {
-            callback(d);
-          }, "text").error(function(xhr,status,err) {
-            console.error("getURL("+JSON.stringify(url)+") error : "+err);
+          var xhr = new XMLHttpRequest();
+          xhr.responseType = "text";
+          xhr.addEventListener("load", function () {
+            if (xhr.status === 200) {
+              callback(xhr.response.toString());
+            } else {
+              console.error("getURL("+JSON.stringify(url)+") error : HTTP "+xhr.status);
+              callback(undefined);
+            }
+          });
+          xhr.addEventListener("error", function (e) {
+            console.error("getURL("+JSON.stringify(url)+") error "+e);
             callback(undefined);
           });
+          xhr.open("GET", url, true);
+          xhr.send(null);
         } else {
           // Node.js
           if (resultUrl.substr(0,4)=="http") {
@@ -436,33 +475,53 @@
     return window.location.protocol=="https:";
   }
 
-  /* Open a file load dialog. ID is to ensure that subsequent calls with
-  the same ID remember the last used directory.
-    type=="arraybuffer" => Callback is called with an arraybuffer
-    type=="text" => Callback is called with a string
+  /* Open a file load dialog.
+  options = {
+   id :  ID is to ensure that subsequent calls with  the same ID remember the last used directory.
+   type :
+     type=="text" => (default) Callback is called with a string
+     type=="arraybuffer" => Callback is called with an arraybuffer
+   mimeType : (optional) comma-separated list of accepted mime types for files or extensions (eg. ".js,application/javascript")
+
+   callback(contents, mimeType, fileName)
   */
-  function fileOpenDialog(id, type, callback) {
-    var loaderId = id+"FileLoader";
+  function fileOpenDialog(options, callback) {
+    options = options||{};
+    options.type = options.type||"text";
+    options.id = options.id||"default";
+    var loaderId = options.id+"FileLoader";
     var fileLoader = document.getElementById(loaderId);
     if (!fileLoader) {
       fileLoader = document.createElement("input");
       fileLoader.setAttribute("id", loaderId);
       fileLoader.setAttribute("type", "file");
       fileLoader.setAttribute("style", "z-index:-2000;position:absolute;top:0px;left:0px;");
+      if (options.mimeType)
+        fileLoader.setAttribute("accept",options.mimeType);
       fileLoader.addEventListener('click', function(e) {
         e.target.value = ''; // handle repeated upload of the same file
       });
       fileLoader.addEventListener('change', function(e) {
         if (!fileLoader.callback) return;
         var files = e.target.files;
+        var file = files[0];
         var reader = new FileReader();
         reader.onload = function(e) {
-          fileLoader.callback(e.target.result);
+          /* Doing reader.readAsText(file) interprets the file as UTF8
+          which we don't want. */
+          var result;
+          if (options.type=="text") {
+            var a = new Uint8Array(e.target.result);
+            result = "";
+            for (var i=0;i<a.length;i++)
+              result += String.fromCharCode(a[i]);
+          } else
+            result = e.target.result;
+          fileLoader.callback(result, file.type, file.name);
           fileLoader.callback = undefined;
         };
-        if (type=="text") reader.readAsText(files[0]);
-        else if (type=="arraybuffer") reader.readAsArrayBuffer(files[0]);
-        else throw new Error("fileOpenDialog: unknown type "+type);
+        if (options.type=="text" || options.type=="arraybuffer") reader.readAsArrayBuffer(file);
+        else throw new Error("fileOpenDialog: unknown type "+options.type);
       }, false);
       document.body.appendChild(fileLoader);
     }
@@ -470,10 +529,54 @@
     fileLoader.click();
   }
 
+  /* Save a file with a save file dialog. callback(savedFileName) only called in chrome app case when we knopw the filename*/
+  function fileSaveDialog(data, filename, callback) {
+    function errorHandler() {
+      Espruino.Core.Notifications.error("Error Saving", true);
+    }
+
+    if (chrome.fileSystem) {
+      // Chrome Web App / NW.js
+      chrome.fileSystem.chooseEntry({type: 'saveFile', suggestedName:filename}, function(writableFileEntry) {
+        if (!writableFileEntry) return; // cancelled
+        writableFileEntry.createWriter(function(writer) {
+          var blob = new Blob([data],{ type: "text/plain"} );
+          writer.onerror = errorHandler;
+          // when truncation has finished, write
+          writer.onwriteend = function(e) {
+            writer.onwriteend = function(e) {
+              console.log('FileWriter: complete');
+              if (callback) callback(writableFileEntry.name);
+            };
+            console.log('FileWriter: writing');
+            writer.write(blob);
+          };
+          // truncate
+          console.log('FileWriter: truncating');
+          writer.truncate(blob.size);
+        }, errorHandler);
+      });
+    } else {
+      var rawdata = new Uint8Array(data.length);
+      for (var i=0;i<data.length;i++) rawdata[i]=data.charCodeAt(i);
+      var a = document.createElement("a"),
+          file = new Blob([rawdata.buffer], {type: "text/plain"});
+      var url = URL.createObjectURL(file);
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(function() {
+          document.body.removeChild(a);
+          window.URL.revokeObjectURL(url);
+      }, 0);
+    }
+  };
+
   /** Bluetooth device names that we KNOW run Espruino */
   function recognisedBluetoothDevices() {
     return [
-       "Puck.js", "Pixl.js", "MDBT42Q", "Espruino", "Badge", "Thingy", "RuuviTag", "iTracker", "Smartibot"
+       "Puck.js", "Pixl.js", "MDBT42Q", "Espruino", "Badge", "Thingy", "RuuviTag", "iTracker", "Smartibot", "Bangle.js",
     ];
   }
 
@@ -491,7 +594,8 @@
 
   function getVersion(callback) {
     var xmlhttp = new XMLHttpRequest();
-    xmlhttp.open('GET', 'manifest.json');
+    var path = (window.location.pathname.indexOf("relay")>=0)?"../":"";
+    xmlhttp.open('GET', path+'manifest.json');
     xmlhttp.onload = function (e) {
         var manifest = JSON.parse(xmlhttp.responseText);
         callback(manifest.version);
@@ -548,10 +652,69 @@
     return String.fromCharCode.apply(null, new Uint8Array(buf));
   };
 
+  /* Parses a JSON string into JS, taking into account some of the issues
+  with Espruino's JSON from 2v04 and before */
+  function parseJSONish(str) {
+    var lex = getLexer(str);
+    var tok = lex.next();
+    var final = "";
+    while (tok!==undefined) {
+      var s = tok.str;
+      if (tok.type=="STRING") {
+        s = s.replace(/\\([0-9])/g,"\\u000$1");
+        s = s.replace(/\\x(..)/g,"\\u00$1");
+      }
+      final += s;
+      tok = lex.next();
+    }
+    return JSON.parse(final);
+  };
+
+  // Does the given string contain only ASCII characters?
+  function isASCII(str) {
+    for (var i=0;i<str.length;i++) {
+      var c = str.charCodeAt(i);
+      if ((c<32 || c>126) &&
+          (c!=10) && (c!=13) && (c!=9)) return false;
+    }
+    return true;
+  }
+
+  // btoa that works on utf8
+  function btoa(input) {
+    var b64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    var out = "";
+    var i=0;
+    while (i<input.length) {
+      var octet_a = 0|input.charCodeAt(i++);
+      var octet_b = 0;
+      var octet_c = 0;
+      var padding = 0;
+      if (i<input.length) {
+        octet_b = 0|input.charCodeAt(i++);
+        if (i<input.length) {
+          octet_c = 0|input.charCodeAt(i++);
+          padding = 0;
+        } else
+          padding = 1;
+      } else
+        padding = 2;
+      var triple = (octet_a << 0x10) + (octet_b << 0x08) + octet_c;
+      out += b64[(triple >> 18) & 63] +
+             b64[(triple >> 12) & 63] +
+             ((padding>1)?'=':b64[(triple >> 6) & 63]) +
+             ((padding>0)?'=':b64[triple & 63]);
+    }
+    return out;
+  }
+
   Espruino.Core.Utils = {
       init : init,
       isWindows : isWindows,
+      isLinux : isLinux,
       isAppleDevice : isAppleDevice,
+      isChrome : isChrome,
+      isFirefox : isFirefox,
       getChromeVersion : getChromeVersion,
       isNWApp : isNWApp,
       isChromeWebApp : isChromeWebApp,
@@ -563,16 +726,16 @@
       getLexer : getLexer,
       countBrackets : countBrackets,
       getEspruinoPrompt : getEspruinoPrompt,
-      executeExpression : executeExpression,
+      executeExpression : function(expr,callback) { executeExpression(expr,callback,false); },
+      executeStatement : function(statement,callback) { executeExpression(statement,callback,true); },
       versionToFloat : versionToFloat,
-      htmlTable : htmlTable,
-      markdownToHTML : markdownToHTML,
       getURL : getURL,
       getBinaryURL : getBinaryURL,
       getJSONURL : getJSONURL,
       isURL : isURL,
       needsHTTPS : needsHTTPS,
       fileOpenDialog : fileOpenDialog,
+      fileSaveDialog : fileSaveDialog,
       recognisedBluetoothDevices : recognisedBluetoothDevices,
       isRecognisedBluetoothDevice : isRecognisedBluetoothDevice,
       getVersion : getVersion,
@@ -581,5 +744,8 @@
       stringToBuffer : stringToBuffer,
       dataViewToArrayBuffer : dataViewToArrayBuffer,
       arrayBufferToString : arrayBufferToString,
+      parseJSONish : parseJSONish,
+      isASCII : isASCII,
+      btoa : btoa
   };
 }());

@@ -10,11 +10,16 @@ To add a new serial device, you must add an object to
   Espruino.Core.Serial.devices.push({
     "name" : "Test",               // Name, when initialising
     "init" : function()            // Gets called at startup
+    "getStatus" : function(ignoreSettings)   // Optional - returns:
+      // true - all ok
+      // {error: error_string}
+      // {warning: warning_string}
     "getPorts": function(callback) // calls 'callback' with an array of ports:
         callback([{path:"TEST",          // path passed to 'open' (and displayed to user)
                    description:"test",   // description displayed to user
                    type:"test",           // bluetooth|usb|socket - used to show icon in UI
                    // autoconnect : true  // automatically conect to this (without the connect menu)
+                   // promptsUser : true  // this is set if we expect the Web Browser to prompt the user for this item
                  }], true); // instantPorts - will getPorts return all the ports on the first call, or does it need multiple calls (eg. Bluetooth)
     "open": function(path, openCallback, receiveCallback, disconnectCallback),
     "write": function(dataAsString, callbackWhenWritten)
@@ -24,6 +29,9 @@ To add a new serial device, you must add an object to
 
 */
 (function() {
+  // If XOFF flow control is received, this is how long we wait
+  // before resuming anyway
+  const FLOW_CONTROL_RESUME_TIMEOUT = 20000; // 20 sec
 
   // List of ports and the devices they map to
   var portToDevice = undefined;
@@ -41,6 +49,8 @@ To add a new serial device, you must add an object to
   var writeTimeout = undefined;
   /// flow control XOFF received - we shouldn't send anything
   var flowControlXOFF = false;
+  /// Set up when flow control received - if no response is received we start sending anyway
+  var flowControlTimeout;
 
 
   function init() {
@@ -62,7 +72,7 @@ To add a new serial device, you must add an object to
      section : "Communications",
      name : "Software Flow Control",
      description : "Respond to XON/XOFF flow control characters to throttle data uploads. By default Espruino sends XON/XOFF for USB and Bluetooth (on 2v05+).",
-     type : "bool",
+     type : "boolean",
      defaultValue : true
    });
 
@@ -162,8 +172,13 @@ To add a new serial device, you must add an object to
       }
     }
 
+    var portInfo = { port:serialPort };
     connectionInfo = undefined;
-    flowControlXOFF = false;   
+    flowControlXOFF = false;
+    if (flowControlTimeout) {
+      clearTimeout(flowControlTimeout);
+      flowControlTimeout = undefined;
+    }
     currentDevice = portToDevice[serialPort];
     currentDevice.open(serialPort, function(cInfo) {  // CONNECT
       if (!cInfo) {
@@ -174,7 +189,6 @@ To add a new serial device, you must add an object to
         connectionInfo = cInfo;
         connectedPort = serialPort;
         console.log("Connected", cInfo);
-        var portInfo = { port:serialPort };
         if (connectionInfo.portName)
           portInfo.portName = connectionInfo.portName;
         Espruino.callProcessor("connected", portInfo, function() {
@@ -189,32 +203,46 @@ To add a new serial device, you must add an object to
           if (u[i]==17) { // XON
             console.log("XON received => resume upload");
             flowControlXOFF = false;
+            if (flowControlTimeout) {
+              clearTimeout(flowControlTimeout);
+              flowControlTimeout = undefined;
+            }
           }
           if (u[i]==19) { // XOFF
             console.log("XOFF received => pause upload");
             flowControlXOFF = true;
+            if (flowControlTimeout)
+              clearTimeout(flowControlTimeout);
+            flowControlTimeout = setTimeout(function() {
+              console.log("XOFF timeout => resume upload anyway");
+              flowControlXOFF = false;
+              flowControlTimeout = undefined;
+            }, FLOW_CONTROL_RESUME_TIMEOUT);
           }
         }
       }
       if (readListener) readListener(data);
     }, function() { // DISCONNECT
       currentDevice = undefined;
-      if (!connectionInfo) {
-        // we got a disconnect when we hadn't connected...
-        // Just call connectCallback(undefined), don't bother sending disconnect
-        connectCallback(undefined);
-        return;
-      }      
-      connectionInfo = undefined;
       if (writeTimeout!==undefined)
         clearTimeout(writeTimeout);
       writeTimeout = undefined;
       writeData = [];
       sendingBinary = false;
       flowControlXOFF = false;
-
-      Espruino.callProcessor("disconnected", undefined, function() {
-        disconnectCallback();
+      if (flowControlTimeout) {
+        clearTimeout(flowControlTimeout);
+        flowControlTimeout = undefined;
+      }
+      if (!connectionInfo) {
+        // we got a disconnect when we hadn't connected...
+        // Just call connectCallback(undefined), don't bother sending disconnect
+        connectCallback(undefined);
+        return;
+      }
+      connectionInfo = undefined;
+      Espruino.callProcessor("disconnected", portInfo, function() {
+        disconnectCallback(portInfo);
       });
     });
   };
